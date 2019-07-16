@@ -5,13 +5,6 @@
 *   Copyright (c) 1997, 1998 Timpanogas Research Group, Inc.  All Rights
 *			    Reserved.
 *
-*   This program is an unpublished work of TRG, Inc. and contains
-*   trade secrets and other proprietary information.  Unauthorized
-*   use, copying, disclosure, or distribution of this file without the
-*   consent of TRG, Inc. can subject the offender to severe criminal
-*   and/or civil penalities.
-*
-*
 *   AUTHOR   :  Jeff V. Merkey
 *   FILE     :  MENU.C
 *   DESCRIP  :  Text Menu Screen Code for MANOS v1.0

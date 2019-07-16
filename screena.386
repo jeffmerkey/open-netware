@@ -1,0 +1,298 @@
+
+;***************************************************************************
+;
+;   Copyright (c) 1997, 1998 Timpanogas Research Group, Inc.  All Rights
+;                            Reserved.
+;
+;   This program is an unpublished work of TRG, Inc. and contains
+;   trade secrets and other proprietary information.  Unauthorized
+;   use, copying, disclosure, or distribution of this file without the
+;   consent of TRG, Inc. can subject the offender to severe criminal
+;   and/or civil penalities.
+;
+;
+;   AUTHOR   :  Jeff V. Merkey
+;   FILE     :  SCREENA.386
+;   DESCRIP  :  Screen Code for MANOS v1.0
+;   DATE     :  December 11, 1997
+;
+;
+;***************************************************************************
+;
+.486P         ; select the processor
+MODEL FLAT
+
+	CGROUP GROUP  _TEXT
+	DGROUP GROUP  _DATA
+	ASSUME  cs:_TEXT, ds:_DATA, es:_DATA, fs:_DATA
+
+_DATA SEGMENT PUBLIC USE32 'DATA'
+;
+;  Video Equates and Types
+;
+
+CRTCPort1   EQU  03D4h    ; Index port for CRTC
+CRTCPort2   EQU  03D5h    ; Data port for CRTC
+CRTCAddHi   EQU  0Ch      ; Register for lo byte of Video address
+CRTCAddLo   EQU  0Dh      ; Register for lo byte of Video address
+CRTCCurHi   EQU  0Eh      ; Register for lo byte of Cursor address
+CRTCCurLo   EQU  0Fh      ; Register for lo byte of Cursor address
+
+CRTC0C       db  0        ; CRT Reg 0C HiByte address value
+CRTC0D       db  0        ; CRT Reg 0D LoByte address value
+
+_DATA	ENDS
+
+_TEXT  SEGMENT PUBLIC USE32 'CODE'
+
+;
+;  InitVideo makes Video Screen 0 the default screen. That
+;  makes the VGATextBase address 0B8000h
+;
+
+public InitVideo
+InitVideo:
+	cld
+	mov   al, CRTCAddHi       ;Index of hi byte
+	mov   dx, CRTCPort1       ;Index Port
+	out   dx, AL
+	mov   al, CRTC0C          ;hi byte value to send
+	mov   dx, CRTCPort2       ;Data Port
+	out   dx, al
+	;
+	mov   al, CRTCAddLo       ;Index of lo byte
+	mov   dx, CRTCPort1       ;Index Port
+	out   dx, al
+	mov   al, CRTC0D          ;lo byte value to send
+	mov   dx, CRTCPort2       ;Data Port
+	out   dx, al
+	ret
+
+public HardXY
+HardXY:
+	push  ebx
+
+	mov   ebx, dword ptr [esp + 8]   ; X
+	mov   eax, dword ptr [esp + 12]  ; Y
+	mov   ecx, 80
+	mul   ecx                 ; Line * 80
+	add   eax, ebx             ; Line plus column
+	mov   dx, CRTCPort1        ; Index register
+	push  eax
+	mov   al, CRTCCurLo
+	out   dx, al               ; Index 0Fh for low byte
+	pop   eax
+	mov   dx, CRTCPort2        ; Data register
+	out   dx, al               ; Send Low byte out
+	shr   eax, 08              ; shift hi byte into al
+	push  eax
+	mov   dx, CRTCPort1
+	mov   al, CRTCCurHi
+	out   dx, al               ; Index for High byte
+	pop   eax
+	mov   dx, CRTCPort2
+	out   dx, al               ; Send High byte out
+
+	pop   ebx
+	ret
+
+
+public CopyData
+CopyData:
+	push   esi
+	push   edi
+
+	mov    esi, [esp + 12]
+	mov    edi, [esp + 16]
+	mov    ecx, [esp + 20]
+	jecxz  CopyDataExit
+	cld
+	cmp    edi, esi
+	jb     CopyTheData
+
+	std
+	add    esi, ecx
+	add    edi, ecx
+	dec    esi
+	dec    edi
+
+CopyTheData:
+	rep    movsb
+
+CopyDataExit:
+	cld
+	pop    edi
+	pop    esi
+	ret
+
+public CopyDataD
+CopyDataD:
+	push   esi
+	push   edi
+
+	mov    esi, [esp + 12]
+	mov    edi, [esp + 16]
+	mov    ecx, [esp + 20]
+	jecxz  CopyDataDExit
+	cld
+	cmp    edi, esi
+	jb     CopyTheDataD
+
+	std
+	mov    eax, ecx
+	shl    eax, 2    ; multiply by 4
+	add    esi, eax
+	add    edi, eax
+	dec    esi
+	dec    edi
+
+CopyTheDataD:
+	rep    movsd
+
+CopyDataDExit:
+	cld
+	pop    edi
+	pop    esi
+	ret
+
+public CopyDataB
+CopyDataB:
+	push   esi
+	push   edi
+
+	mov    esi, [esp + 12]
+	mov    edi, [esp + 16]
+	mov    ecx, [esp + 20]
+	jecxz  CopyDataBExit
+	cld
+	cmp    edi, esi
+	jb     CopyTheDataB
+
+	std
+	add    esi, ecx
+	add    edi, ecx
+	dec    esi
+	dec    edi
+
+CopyTheDataB:
+	rep    movsb
+
+CopyDataBExit:
+	cld
+	pop    edi
+	pop    esi
+	ret
+
+
+
+public SetData
+SetData:
+	push   edi
+
+	cld
+	mov    edi, [esp + 8]
+	mov    eax, [esp + 12]
+	mov    ecx, [esp + 16]
+
+	rep    stosb
+
+	pop    edi
+	ret
+
+public SetDataB
+SetDataB:
+	push   edi
+
+	cld
+	mov    edi, [esp + 8]
+	mov    eax, [esp + 12]
+	mov    ecx, [esp + 16]
+
+	rep    stosb
+
+	pop    edi
+	ret
+
+public SetDataD
+SetDataD:
+	push   edi
+
+	cld
+	mov    edi, [esp + 8]
+	mov    eax, [esp + 12]
+	mov    ecx, [esp + 16]
+
+	rep    stosd
+
+	pop    edi
+	ret
+
+
+public CompareData
+CompareData:
+	push   esi
+	push   edi
+
+	cld
+	mov    esi, [esp + 8]
+	mov    edi, [esp + 12]
+	mov    ecx, [esp + 16]
+
+	rep    cmpsb
+
+	pop    edi
+	pop    esi
+	ret
+
+public CompareDataB
+CompareDataB:
+	push   esi
+	push   edi
+
+	cld
+	mov    esi, [esp + 8]
+	mov    edi, [esp + 12]
+	mov    ecx, [esp + 16]
+
+	rep    cmpsb
+
+	pop    edi
+	push   esi
+	ret
+
+public CompareDataW
+CompareDataW:
+	push   esi
+	push   edi
+
+	cld
+	mov    esi, [esp + 8]
+	mov    edi, [esp + 12]
+	mov    ecx, [esp + 16]
+
+	rep    cmpsw
+
+	pop    edi
+	push   esi
+	ret
+
+public CompareDataD
+CompareDataD:
+	push   esi
+	push   edi
+
+	cld
+	mov    esi, [esp + 8]
+	mov    edi, [esp + 12]
+	mov    ecx, [esp + 16]
+
+	rep    cmpsd
+
+	pop    edi
+	push   esi
+	ret
+
+
+_TEXT  ENDS
+
+END

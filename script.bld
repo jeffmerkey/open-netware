@@ -1,0 +1,585 @@
+
+
+#**************************************************************************
+#
+#  MANOS.EXE, LOADER.EXE, INIT.EXE, and MSTUB.EXE Build Script
+#
+#**************************************************************************
+#
+#   AUTHOR   :  Jeff V. Merkey
+#   FILE     :  SCRIPT.BLD
+#   DESCRIP  :  Build Script for MANOS Operating System
+#   DATE     :  March 9, 1998
+#
+#**************************************************************************
+
+.Silent
+.RejectInitFile
+
+BUILD_USERMAKE = 0
+
+!if ("$[clip,$[u,$(_Cwd)],3,]" != "$[u,\MANOS\OS\SRC]")
+   BUILD_USERMAKE = 1
+   %echo building from USERMAKE Area ...
+
+   #
+   #  define directory structure for build
+   #
+
+   FLATAREA   = \MANOS\OS\SRC
+   FLATOBJ    = \MANOS\OS\OBJ
+   INCPATH    = .
+   SRCDIR     = .
+   INCDIR     = .
+   EXEDIR     = ..\EXE
+   OBJDIR     = ..\OBJ
+   VCSDIR     = \MANOS\OS\PVCS
+   STUBF      = mstub.exe
+   INITF      = init.exe
+   LOADERF    = loader.dll
+   KERNELF    = manos32.dll
+   MANOSF     = manos.exe
+   DEPF       = deps.bld
+   LINKER16   = tlink.exe
+   LINKER32   = tlink32.exe
+   THUNKLINK  = llink.exe
+   COMPILER   = bcc32.exe
+   ASSEMBLER  = tasmx.exe
+   SCANDEP    = scandeps.exe
+   GETS       = get.exe
+   COPY       = copy
+
+   #
+   #   define default paths for various types of files
+   #
+
+   .PATH.c   = $(SRCDIR);$(FLATAREA)
+   .PATH.h   = $(SRCDIR);$(FLATAREA)
+   .PATH.386 = $(SRCDIR);$(FLATAREA)
+   .PATH.usr = $(SRCDIR)
+   .PATH.inc = $(FLATAREA)
+   .PATH.def = $(SRCDIR)
+   .PATH.bat = $(SRCDIR);$(FLATAREA)
+   .PATH.bld = $(SRCDIR)
+   .PATH.obj = $(OBJDIR)
+
+!else
+
+   #
+   #  define directory structure for build
+   #
+
+   FLATAREA   = \MANOS\OS\SRC
+   FLATOBJ    = \MANOS\OS\OBJ
+   INCPATH    = .
+   SRCDIR     = .
+   INCDIR     = .
+   EXEDIR     = ..\EXE
+   OBJDIR     = ..\OBJ
+   VCSDIR     = \MANOS\OS\PVCS
+   STUBF      = mstub.exe
+   INITF      = init.exe
+   LOADERF    = loader.dll
+   KERNELF    = manos32.dll
+   MANOSF     = manos.exe
+   DEPF       = deps.bld
+   LINKER16   = tlink.exe
+   LINKER32   = tlink32.exe
+   THUNKLINK  = llink.exe
+   COMPILER   = bcc32.exe
+   ASSEMBLER  = tasmx.exe
+   SCANDEP    = scandeps.exe
+   GETS       = get.exe
+   COPY       = copy
+
+   #
+   #   define default paths for various types of files
+   #
+
+   .PATH.c   = $(FLATAREA)
+   .PATH.h   = $(FLATAREA)
+   .PATH.386 = $(FLATAREA)
+   .PATH.usr = $(FLATAERA)
+   .PATH.inc = $(FLATAREA)
+   .PATH.def = $(FLATAREA)
+   .PATH.bat = $(FLATAREA)
+   .PATH.bld = $(FLATAREA)
+   .PATH.obj = $(FLATOBJ)
+
+!endif
+
+
+.PATH.c_v = $(VCSDIR)
+.PATH.h_v = $(VCSDIR)
+.PATH.38v = $(VCSDIR)
+.PATH.inv = $(VCSDIR)
+.PATH.dev = $(VCSDIR)
+.PATH.bav = $(VCSDIR)
+.PATH.blv = $(VCSDIR)
+
+.Type.src = .c .386 .def
+.Type.hdr = .h .inc
+.Type.bld = .bld
+
+#
+#  specify archive names for each type of source file
+#
+
+.Archive .c_v(.c)
+.Archive .h_v(.h)
+.Archive .38v(.386)
+.Archive .inv(.inc)
+.Archive .lnv(.lnk)
+.Archive .dev(.def)
+.Archive .blv(.bld)
+.Archive .bav(.bat)
+
+#
+#   include listing of source files for specific modules
+#
+
+Include sources.bld
+
+#
+#   specify dependency structure for each module to be built
+#
+
+ALL: $(INC_FILES) $(H_FILES) $(MANOS_FILES) $(LOADER_FILES) \
+     $(INIT_FILES) $(STUB_FILES) $(DEPF) $(EXEDIR)\$(STUBF) $(EXEDIR)\$(INITF) \
+     $(EXEDIR)\$(LOADERF) $(EXEDIR)\$(KERNELF) $(EXEDIR)\$(MANOSF)
+
+$(EXEDIR)\$(MANOSF): $(INC_FILES) $(H_FILES) $(MANOS_FILES) $(LOADER_FILES) \
+		     $(INIT_FILES) $(STUB_FILES) \
+		     $(EXEDIR)\$(STUBF) $(EXEDIR)\$(INITF) \
+		     $(EXEDIR)\$(LOADERF) $(EXEDIR)\$(KERNELF)
+     %echo Thunk linking PE Executable $[u,$(EXEDIR)\$(MANOSF)] ...
+     $(THUNKLINK) $(EXEDIR)\$(INITF) $(EXEDIR)\$(LOADERF) \
+		  $(EXEDIR)\$(KERNELF) $(MANOSF)
+     $(COPY)      $(MANOSF) $(EXEDIR)
+
+$(EXEDIR)\$(KERNELF): $(INC_FILES) $(H_FILES) $(MANOS_FILES) $(DEPF)\
+		      $[f,$(OBJDIR),$(MANOS_FILES),obj] $(EXEDIR)\$(STUBF)
+     %echo linking (32-bit) $[u,$(EXEDIR)\$(KERNELF)] ...
+     $(LINKER32) /c /m /v /s /Tpd <@<
+		 $[f,$(OBJDIR),$(MANOS_FILES),obj]
+< ,$(EXEDIR)\$(KERNELF),,, < <
+
+NAME            $(KERNELF)
+DESCRIPTION     'MANOS v1.0'
+EXETYPE         WINDOWS
+STUB            '$(EXEDIR)\$(STUBF)'
+CODE            PRELOAD MOVEABLE DISCARDABLE
+DATA            PRELOAD MOVEABLE SINGLE
+HEAPSIZE        8192
+STACKSIZE       8192
+
+EXPORTS
+		sema_init
+		sema_alloc
+		sema_free
+		sema_wait
+		sema_post
+		sema_timed_wait
+		sema_release
+
+		rwlock_init
+		rwlock_alloc
+		rwlock_free
+		rwlock_read_lock
+		rwlock_write_lock
+		rwlock_read_unlock
+		rwlock_write_unlock
+		rwlock_release
+
+		EnterDebugger
+		createThread
+		createThreadContext
+		killThread
+		sleepThread
+		delayThread
+		rescheduleThread
+		thread_switch
+
+		KeyboardPollProcedure
+		ResetKeyboard
+		KeyboardEnable
+		KeyboardDisable
+		ScreenInputFromKeyboard
+		ReadKeyboard
+		ClearScreen
+		PutChar
+		GetChar
+		ScrollDisplay
+		GetVidOwner
+		SetNormVid
+		GetNormVid
+		SetVideoOwner
+		SetKeyboardOwner
+		SetXY
+		GetXY
+		PutVidString
+		PutVidStringCleol
+		PutVidChar
+		Pause
+		ClearPauseMode
+		SetPauseMode
+		deleteScreen
+		createScreen
+		ScreenTTYOut
+		DisableCursor
+		EnableCursor
+		scheduleTimer
+		cancelTimer
+		spin_lock
+		spin_try_lock
+		spin_unlock
+		map_address
+
+		get_running_process
+		get_processor_id
+		set_processor_id
+
+		panic
+		set_flags
+		get_flags
+		set_interrupt
+		clear_interrupt
+		mask_interrupt
+		unmask_interrupt
+		eoi_interrupt
+		outb
+		outw
+		outws
+		outd
+		inb
+		inw
+		inws
+		ind
+		MicroDelay
+		DMASetUp
+		ReadDTSC
+		GetSystemDTSC
+		GetCMOSDate
+		GetCMOSTime
+		ReadCMOS
+		GetCurrentTime
+		CopyData
+		CopyDataB
+		SetData
+		SetDataB
+		SetDataD
+
+		isalpha
+		isdigit
+		isalnum
+		issymbol
+		isspace
+		isprint
+		isgraph
+		iscntrl
+		islower
+		isupper
+		ispunct
+		isxdigit
+		toupper
+		tolower
+		max
+		min
+		strcpy
+		strncpy
+		strcat
+		strncat
+		strcmp
+		stricmp
+		strncmp
+		strnicmp
+		strcspn
+		strchr
+		strrchr
+		strlen
+		strupr
+		strlwr
+
+		printfScreenWithAttribute
+		printfScreen
+		printfWithAttribute
+
+		ConsolePrintf
+		printf
+		sprintf
+		vsprintf
+
+		LoadLibrary
+		GetProcAddress
+
+		malloc
+		free
+		pmalloc
+		pfree
+		kmalloc
+		kfree
+		rand
+
+		mah_return
+		mah_alloc
+
+		RegisterUnloadProcedure
+		RegisterExitProcedure
+
+		fopen
+		fclose
+		fread
+		fwrite
+		ftell
+		fseek
+		fputs
+		fputs
+		fgets
+		fgetc
+		remove
+		rewind
+		rename
+		fflush
+
+		TLBShootDown
+
+
+
+<
+
+$(EXEDIR)\$(LOADERF): $(INC_FILES) $(H_FILES) $(LOADER_FILES) $(DEPF)\
+		      $[f,$(OBJDIR),$(LOADER_FILES),obj] $(EXEDIR)\$(STUBF)
+     %echo linking (32-bit) $[u,$(EXEDIR)\$(LOADERF)] ...
+     $(LINKER32) /c /m /s /Tpd <@<
+		 $[f,$(OBJDIR),$(LOADER_FILES),obj]
+< ,$(EXEDIR)\$(LOADERF),,, < <
+
+NAME           $(LOADERF)
+DESCRIPTION    'MANOS LOADER v2.0'
+EXETYPE        WINDOWS
+STUB           '$(EXEDIR)\$(STUBF)'
+CODE           PRELOAD MOVEABLE DISCARDABLE
+DATA           PRELOAD MOVEABLE SINGLE
+HEAPSIZE       8192
+STACKSIZE      8192
+
+<
+
+$(EXEDIR)\$(INITF):  $(INIT_FILES) $(DEPF) $[f,$(OBJDIR),$(INIT_FILES),obj]
+     %echo linking (16-bit) $[u,$(EXEDIR)\$(INITF)] ...
+     $(LINKER16) /3 /c $[f,$(OBJDIR),$(INIT_FILES),obj], $(EXEDIR)\$(INITF)
+
+
+$(EXEDIR)\$(STUBF):  $(STUB_FILES) $(DEPF) $[f,$(OBJDIR),$(STUB_FILES),obj]
+     %echo linking (16-bit) $[u,$(EXEDIR)\$(STUBF)] ...
+     $(LINKER16) /3 /c $[f,$(OBJDIR),$(STUB_FILES),obj], $(EXEDIR)\$(STUBF)
+
+
+#
+#   include a sources dependency section created by SCANDEPS
+#
+
+!if %exists($(DEPF))
+    include $(DEPF)
+!else
+    %echo DEPS.BLD not found.  do BUILD CLEAN ...
+    %abort
+!endif
+
+$(DEPF):
+     %echo building DEPS.BLD ...
+     (Shell)(Silent)$(SCANDEP) $(FLATAREA)\*.c -output $(DEPF)
+     %echo DEPS.BLD build complete ...
+     %echo run BUILD again to continue ...
+     %abort
+
+#
+#   specify rules and commands for each source.target: pair
+#   if the archives are updated, BUILD will extract filenames
+#   based on soure.target: and write them to the current
+#   orking source directory
+#
+
+#
+#   archive extraction rules
+#
+
+.c_v.c:
+   %echo Extracting $[u,$[f,"",$(_Target)]]
+   %if ($(BUILD_USERMAKE) == 1)
+      (Shell)(Silent)$(GETS) -q -w $(_SourceRev) $(_Source)($(_Target))
+   %else
+      (Shell)(Silent)$(GETS) -q $(_SourceRev) $(_Source)($(_Target))
+   %endif
+
+.h_v.h:
+   %echo Extracting $[u,$[f,"",$(_Target)]]
+   %if ($(BUILD_USERMAKE) == 1)
+      (Shell)(Silent)$(GETS) -q -w $(_SourceRev) $(_Source)($(_Target))
+   %else
+      (Shell)(Silent)$(GETS) -q $(_SourceRev) $(_Source)($(_Target))
+   %endif
+
+.38v.386:
+   %echo Extracting $[u,$[f,"",$(_Target)]]
+   %if ($(BUILD_USERMAKE) == 1)
+      (Shell)(Silent)$(GETS) -q -w $(_SourceRev) $(_Source)($(_Target))
+   %else
+      (Shell)(Silent)$(GETS) -q $(_SourceRev) $(_Source)($(_Target))
+   %endif
+
+.inv.inc:
+   %echo Extracting $[u,$[f,"",$(_Target)]]
+   %if ($(BUILD_USERMAKE) == 1)
+      (Shell)(Silent)$(GETS) -q -w $(_SourceRev) $(_Source)($(_Target))
+   %else
+      (Shell)(Silent)$(GETS) -q $(_SourceRev) $(_Source)($(_Target))
+   %endif
+
+.bav.bat:
+   %echo Extracting $[u,$[f,"",$(_Target)]]
+   %if ($(BUILD_USERMAKE) == 1)
+      (Shell)(Silent)$(GETS) -q -w $(_SourceRev) $(_Source)($(_Target))
+   %else
+      (Shell)(Silent)$(GETS) -q $(_SourceRev) $(_Source)($(_Target))
+   %endif
+
+#
+#   source code build rules
+#   source files that are changed will be built based on
+#   source.target: name pairs
+#
+
+.386.obj:
+   %echo assembling $[u,$(_Source)] ...
+   (MemSwap)(Silent)$(ASSEMBLER) /ml /zi /w-ALN /i$(.PATH.usr) /i$(.PATH.inc) $[u,$(_Source)], $[u,$(_Target)]
+
+.c.obj:
+   %echo building $[u,$(_Source)] ...
+   (MemSwap)(Silent)$(COMPILER) -4 -c -a1 -u- -r -O2 -v -y -n$[u,$(OBJDIR)] -I$(.PATH.h) $[u,$(_Source)]
+
+#
+#  build clean entry point
+#
+
+CLEAN:
+    %echo doing BUILD CLEAN ...
+    (Silent)(Ignore)attrib -R $(SRCDIR)\*.c
+    (Silent)(Ignore)attrib -R $(SRCDIR)\*.h
+    (Silent)(Ignore)attrib -R $(SRCDIR)\*.inc
+    (Silent)(Ignore)attrib -R $(SRCDIR)\*.386
+    %echo touching C Files ...
+    (Silent)(Ignore)touch $(SRCDIR)\*.c
+    %echo touching 386 Files ...
+    (Silent)(Ignore)touch $(SRCDIR)\*.386
+    %echo touching H Files ...
+    (Silent)(Ignore)touch $(SRCDIR)\*.h
+    %echo touching INC Files ...
+    (Silent)(Ignore)touch $(SRCDIR)\*.inc
+    %if ($(BUILD_USERMAKE) == 0)
+       (Silent)(Ignore)attrib +R $(SRCDIR)\*.c
+       (Silent)(Ignore)attrib +R $(SRCDIR)\*.h
+       (Silent)(Ignore)attrib +R $(SRCDIR)\*.inc
+       (Silent)(Ignore)attrib +R $(SRCDIR)\*.386
+    %endif
+    %echo deleting EXECUTABLES ...
+    (Silent)(Ignore)del $(EXEDIR)\*.exe
+    (Silent)(Ignore)del $(MANOSF)
+    %echo deleting DLL Files ...
+    (Silent)(Ignore)del $(EXEDIR)\*.dll
+    %echo deleting OBJS ...
+    (Silent)(Ignore)del $(OBJDIR)\*.obj
+    %echo deleting DEPS.BLD ...
+    (Silent)(Ignore)del $(DEPF)
+    %echo execute BUILD again ...
+    %abort
+
+#
+#  build os entry point
+#
+
+OS:
+    %echo doing BUILD MANOS ...
+    %echo touching C Files ...
+    (Silent)(Ignore)touch $(SRCDIR)\*.c
+    %echo touching 386 Files ...
+    (Silent)(Ignore)touch $(SRCDIR)\*.386
+    %echo touching H Files ...
+    (Silent)(Ignore)touch $(SRCDIR)\*.h
+    %echo touching INC Files ...
+    (Silent)(Ignore)touch $(SRCDIR)\*.inc
+    %echo deleting EXECUTABLES ...
+    (Silent)(Ignore)del $(EXEDIR)\*.exe
+    (Silent)(Ignore)del $(MANOSF)
+    %echo deleting DLL Files ...
+    (Silent)(Ignore)del $(EXEDIR)\*.dll
+    %echo deleting OBJS ...
+    (Silent)(Ignore)del $(OBJDIR)\*.obj
+    %echo execute BUILD again ...
+    %abort
+
+#
+#  build flat area entry point
+#
+
+FLAT:
+    %if ($(BUILD_USERMAKE) == 1)
+       %echo You Must Run BUILD FLAT from the FLAT AREA
+       %abort
+    %endif
+    %echo doing BUILD FLAT AREA ...
+    (Silent)(Ignore)attrib -R $(SRCDIR)\.
+    %echo deleting C Files ...
+    (Silent)(Ignore)del $(SRCDIR)\*.c
+    %echo deleting 386 Files ...
+    (Silent)(Ignore)del $(SRCDIR)\*.386
+    %echo deleting H Files ...
+    (Silent)(Ignore)del $(SRCDIR)\*.h
+    %echo deleting INC Files ...
+    (Silent)(Ignore)del $(SRCDIR)\*.inc
+    %echo deleting EXECUTABLES ...
+    (Silent)(Ignore)del $(EXEDIR)\*.exe
+    (Silent)(Ignore)del $(MANOSF)
+    %echo deleting DLL Files ...
+    (Silent)(Ignore)del $(EXEDIR)\*.dll
+    %echo deleting OBJS ...
+    (Silent)(Ignore)del $(OBJDIR)\*.obj
+    %echo deleting DEPS.BLD ...
+    (Silent)(Ignore)del $(DEPF)
+    %echo execute BUILD again ...
+    %abort
+
+#
+#   help for MANOS build scripts
+#
+
+HELP:
+    %echo
+    %echo BUILD Options for MANOS.EXE, LOADER.EXE, INIT.EXE
+    %if ($(BUILD_USERMAKE) == 1)
+       %echo BUILD Mode = [USER_MAKE]
+    %else
+       %echo BUILD Mode = [FLAT_AREA]
+    %endif
+    %echo BUILD NEW     -  get current SCRIPTS, do a BUILD CLEAN
+    %echo BUILD CLEAN   -  does a clean build (touch sources)
+    %echo BUILD FLAT    -  does a flat area build (sync archives/sources)
+    %echo BUILD OS      -  does an default build of MANOS.EXE (build all)
+    %echo BUILD         -  does an incremental build of MANOS.EXE (changes)
+    %echo BUILD HELP    -  this help text
+    %abort
+
+#
+#   get latest build scripts and do build clean
+#
+
+NEW:
+    %echo getting current BUILD SCRIPTS
+    (Shell)(Silent)$(GETS) -q -w *.blv
+    %echo doing a BUILD CLEAN
+    %do CLEAN
+
+
+
+
+

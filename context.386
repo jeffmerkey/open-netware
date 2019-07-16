@@ -1,0 +1,171 @@
+
+
+;***************************************************************************
+;
+;   Copyright (c) 1997, 1998 Timpanogas Research Group, Inc.  All Rights
+;                           Reserved.
+;
+;   This program is an unpublished work of TRG, Inc. and contains
+;   trade secrets and other proprietary information.  Unauthorized
+;   use, copying, disclosure, or distribution of this file without the
+;   consent of TRG, Inc. can subject the offender to severe criminal
+;   and/or civil penalities.
+;
+;
+;   AUTHOR   :  Jeff V. Merkey
+;   FILE     :  CONTEXT.386
+;   DESCRIP  :  Context Switch Code for MANOS v1.0
+;   DATE     :  November 29, 1997
+;
+;
+;**************************************************************************/
+
+.486P         ; select the processor
+model flat
+
+include kernel.inc
+
+	CGROUP GROUP  _TEXT
+	DGROUP GROUP  _DATA
+	ASSUME  cs:_TEXT, ds:_DATA, es:_DATA, fs:_DATA
+
+_DATA SEGMENT PUBLIC USE32 'DATA'
+
+    extrn  ptable: dword
+
+_DATA ENDS
+
+_TEXT SEGMENT PUBLIC USE32 'CODE'
+
+    extrn   preempt_timer       : near
+    extrn   get_running_process : near
+
+;**************************************************************************/
+;
+;   context_switch
+;
+;**************************************************************************/
+
+   align 16
+public switch_process_context
+switch_process_context proc
+	cli                                  ;
+	pushfd                               ;  ret
+	and      dword ptr [esp], not 4000h  ;  flags
+	or       dword ptr [esp], 200h       ;  ints on
+	push     cs                          ;  cs
+
+	push     eax
+	push     ebx
+	push     ecx
+	push     edx
+
+	mov      eax, [esp + 16]   ; cs
+	mov      ebx, [esp + 20]   ; flags
+	mov      ecx, [esp + 24]   ; ret
+	mov      [esp + 24], ebx   ; flags
+	mov      [esp + 20], eax   ; cs
+	mov      [esp + 16], ecx   ; ret
+
+	mov      ebx, [esp + 28]   ; curr -> ebx
+	mov      edx, [esp + 32]   ; target -> ecx
+
+	push     esi
+	push     edi
+	push     ebp
+
+	push     ds
+	push     es
+	push     fs
+
+	mov      [ebx].stackPointer, esp
+	mov      eax, [edx].stackPointer
+	or       eax, eax
+	jnz      continueSwitch
+
+	int      3
+
+
+continueSwitch:
+	;
+	;  unlock both source and target thread
+	;
+
+	mov      [ebx].threadMutex, 0  ;  clear current thread lock
+	mov      [edx].threadMutex, 0  ;  clear target thread lock
+	mov      esp, eax              ;  switch stacks
+
+	add      esp, 3 * 4
+
+	pop      ebp
+	pop      edi
+	pop      esi
+
+	pop      edx
+	pop      ecx
+	pop      ebx
+	pop      eax
+
+	iretd
+
+
+switch_process_context endp
+
+;**************************************************************************/
+;
+;   preemptive context switch
+;
+;**************************************************************************/
+
+   align 16
+public preempt
+preempt proc
+       push     eax
+       push     ebx
+       push     ecx
+       push     edx
+       push     esi
+       push     edi
+       push     ebp
+       push     ds
+       push     es
+       push     fs
+
+       call     get_running_process
+       mov      [eax].stackPointer, esp
+
+       mov      ebx, eax
+       push     ebx      ; save current thread
+       call     preempt_timer
+       pop      ebx
+       or       eax, eax
+       jz       DontSwitchStacks
+
+       ;
+       ;  unlock both source and target thread
+       ;
+
+       mov      [ebx].threadMutex, 0     ; clear current thread lock
+       mov      [eax].threadMutex, 0     ; clear target thread lock
+       mov      esp, [eax].stackPointer  ; switch stacks
+
+DontSwitchStacks:
+       pop      fs
+       pop      es
+       pop      ds
+       pop      ebp
+       pop      edi
+       pop      esi
+       pop      edx
+       pop      ecx
+       pop      ebx
+       pop      eax
+       iretd
+
+preempt endp
+
+
+_TEXT ENDS
+
+END
+

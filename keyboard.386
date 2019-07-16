@@ -1,0 +1,1349 @@
+
+
+;***************************************************************************
+;
+;   Copyright (c) 1997, 1998 Timpanogas Research Group, Inc.  All Rights
+;                            Reserved.
+;
+;   This program is an unpublished work of TRG, Inc. and contains
+;   trade secrets and other proprietary information.  Unauthorized
+;   use, copying, disclosure, or distribution of this file without the
+;   consent of TRG, Inc. can subject the offender to severe criminal
+;   and/or civil penalities.
+;
+;   NOTE:  There is a Real Mode Keyboard Interrupt Handler in INIT.386
+;   that handles cases for the keyboard in real mdoe.  THe MS-DOS keyboard
+;   handler is hooked to prevent the keyboard entering an ambiguous state
+;   when MANOS is active by responding to interrupts based on the state
+;   of the protected mode driver.
+;
+;   AUTHOR   :  Jeff V. Merkey
+;   FILE     :  KEYBOARD.386
+;   DESCRIP  :  Keyboard Code for MANOS v1.0
+;   DATE     :  December 13, 1997
+;
+;***************************************************************************
+
+.486P         ; select the processor
+model flat
+
+include hal.inc
+
+	CGROUP GROUP  _TEXT
+	DGROUP GROUP  _DATA
+	ASSUME  cs:_TEXT, ds:_DATA, es:_DATA, fs:_DATA
+
+_DATA SEGMENT DWORD PUBLIC USE32 'DATA'
+
+;************************************************************************
+;
+;   The keyboard service is designed to return the complete status
+;   of the keyboard shift, control, alt, and lock keys as well as
+;   the key in the buffer that the state applies to.
+;
+;   This is done by using two buffers. The first is a "RAW" key buffer
+;   that holds keys from the interrupt service routine which contains
+;   all raw keystrokes including shift keys going up and down.
+;   This information is needed to build coherent keystroke information
+;   for an application.  This buffer is 32 bytes long.
+;
+;   The second buffer is 256 bytes and contains the translated information
+;   in the form of LONG (a 4 byte quantity times 64).  This LONG contains
+;   the following information:
+;
+;   Low byte  (bits 0-7)    Partially translated application keystroke
+;   Next byte (bits 8-15)   Shift State (Ctrl, Shift, Alt)
+;   Next byte (bits 16-23)  Lock State (CAPS, Num, Scroll)
+;   Hi Byte   (bits 24-31)  Key Source (Bit 1 Set = Key From Numeric Pad)
+;
+;************************************************************************
+
+; global translate and state key variables
+
+dGlobalKey 	dd   0			; Global Key Found, else 0
+dfPrefix	dd   0
+bKbdMode        db   0		        ; ZERO for Cooked, 1 for RAW (testing)
+KbdState        db   0		        ; (See State Masks below)
+KbdLock         db   0		        ; (See Lock Masks below)
+
+;  Raw Keyboard Buffer
+
+RawBuffer       db   20h dup (0)        ; 32 byte RAW buffer
+RawCount        dd   0
+RawKBIn	        dd   offset RawBuffer   ; ptr to next char going in
+RawKBOut        dd   offset RawBuffer   ; ptr to next char going out
+
+;  Final Keyboard Buffer
+
+FinalBuffer	dd   40h dup (0)	; 64 Dwords for translated key buffer
+FinalCount	dd   0
+FinalKBIn	dd   offset FinalBuffer	; ptr to codes comming in
+FinalKBOut	dd   offset FinalBuffer	; ptr to codes going out
+
+;************************************************************************
+;
+;  These "masks" are for keyboard states that change with special keys:
+;  They are BIT OFFSETS and NOT MASKS for logical operations!!!!!
+;
+;************************************************************************
+
+CtrlLeftBit    EQU 0
+CtrlRiteBit    EQU 1
+ShftLeftBit    EQU 2
+ShftRiteBit    EQU 3
+AltLeftBit     EQU 4
+AltRiteBit     EQU 5
+
+;************************************************************************
+;
+;  Mask to tell if one of the 3 states exist (Ctrl, Shift, Alt)
+;
+;************************************************************************
+
+CtrlDownMask	EQU 00000011b
+ShftDownMask	EQU 00001100b
+AltDownMask	EQU 00110000b
+
+;************************************************************************
+;
+;  BIT OFFSETS
+;
+;************************************************************************
+
+CpLockBit      EQU 2
+NmLockBit      EQU 1
+ScLockBit      EQU 0
+
+;************************************************************************
+;
+;  MASKS
+;
+;************************************************************************
+
+CpLockMask     db 00000100b
+NmLockMask     db 00000010b
+ScLockMask     db 00000001b
+
+;************************************************************************
+;
+;   The following special keys are processed and handled
+;   as follows:
+;
+;   NUMLOCK   - Lights NumLock LED and processes keys accordingly
+;   SHIFT     - Sets shift flag and processes keys accordingly
+;   CTRL      - Sets Ctrl flag
+;   CAPSLOCK  - Lights CapsLock LED and processes keys accordingly
+;   ALT	      - Sets Alt flag.
+;   SCRLLOCK  - Lights ScrollLock LED and flag
+;
+;   This table is used to translate all active editing keys from
+;   the raw value provided by the hardware.
+;      SHIFT
+;      Value
+;
+;************************************************************************
+
+KbdTable	db      0        ;   		00
+		db	01Bh	 ;  Esc	 	01
+		db	031h	 ;  1	 	02		21h  !
+		db	032h	 ;  2	 	03		40h  @
+		db	033h	 ;  3	 	04		23h  #
+		db	034h	 ;  4	 	05		24h  $
+		db	035h	 ;  5	 	06		25h  %
+		db	036h	 ;  6	 	07		5Eh  ^
+		db	037h	 ;  7	 	08		26h  &
+		db	038h	 ;  8	 	09		2Ah  *
+		db	039h	 ;  9	 	0A		28h  (
+		db	030h	 ;  0	 	0B		29h  )
+		db	02Dh	 ;  -	 	0C		5Fh  _
+		db	03Dh	 ;  =	 	0D		2Bh  +
+		db	008h	 ;  BkSpc	0E
+		db	009h	 ;  TAB	 	0F
+		db	071h	 ;  q	 	10		51h
+		db	077h	 ;  w	 	11		57h
+		db	065h	 ;  e	 	12		45h
+		db	072h	 ;  r	 	13		52h
+		db	074h	 ;  t	 	14		54h
+		db	079h	 ;  y	 	15		59h
+		db	075h	 ;  u	 	16		55h
+		db	069h	 ;  i	 	17		49h
+		db	06Fh	 ;  o	 	18		4Fh
+		db	070h	 ;  p	 	19		50h
+		db	05Bh	 ;  [	 	1A		7Bh
+		db	05Dh	 ;  ]	 	1B		7Dh
+		db	00Dh	 ;  CR	 	1C
+		db	0h	 ;  LCtrl 	1D    Special handling
+		db	061h	 ;  a	 	1E		41h
+		db	073h	 ;  s	 	1F		53h
+		db	064h	 ;  d	 	20		44h
+		db	066h	 ;  f	 	21		46h
+		db	067h	 ;  g	 	22		47h
+		db	068h	 ;  h	 	23		48h
+		db	06Ah	 ;  j	 	24		4Ah
+		db	06Bh	 ;  k	 	25		4Bh
+		db	06Ch	 ;  l (L) 	26		4Ch
+		db	03Bh	 ;  ;	 	27		3Ah
+		db	027h	 ;  '    	28		22h
+		db	060h	 ;  `	 	29		7Eh
+		db	0h	 ;  LfShf 	2A    Special handling
+		db	05Ch	 ;  \ 	 	2B		7Ch
+		db	07Ah	 ;  z	 	2C		5Ah
+		db	078h	 ;  x	 	2D		58h
+		db	063h	 ;  c	 	2E		43h
+		db	076h	 ;  v	 	2F		56h
+		db	062h	 ;  b	 	30		42h
+		db	06Eh	 ;  n	 	31		4Eh
+		db	06Dh	 ;  m	 	32		4Dh
+		db	02Ch	 ;  ,	 	33		3Ch
+		db	02Eh	 ;  .	 	34		3Eh
+		db	02Fh	 ;  /	 	35		3Fh
+		db	0h	 ;  RtShf 	36    Special handling
+		db	02Ah	 ;  Num * 	37		Num pad
+		db	0h	 ;  LAlt  	38    Special handling
+		db	020h	 ;  Space 	39
+		db	0h	 ;  CpsLk 	3A    Special handling
+		db	00Fh	 ;  F1	 	3B
+		db	010h	 ;  F2	 	3C
+		db	011h	 ;  F3	 	3D
+		db	012h	 ;  F4	 	3E
+		db	013h	 ;  F5	 	3F
+		db	014h	 ;  F6	 	40
+		db	015h	 ;  F7	 	41
+		db	016h	 ;  F8	 	42
+		db	017h	 ;  F9	 	43
+		db	018h	 ;  F10	 	44
+		db	0h	 ;  NumLk 	45   Special handling
+		db	0h	 ;  ScrLk 	46   Special handling
+		db	086h	 ;  Num 7 	47		37h		Num Home
+		db	081h	 ;  Num 8 	48		38h		Num Up
+		db	085h	 ;  Num 9 	49		39h		Num Pg Up
+		db	0ADh	 ;  Num - 	4A				Num Pad
+		db	083h	 ;  Num 4 	4B		34h		Num Left
+		db	09Fh	 ;  Num 5 	4C		35h		Num (Extra code)
+		db	084h	 ;  Num 6 	4D		36h		Num Right
+		db	0ABh	 ;  Num + 	4E				Num Pad
+		db	08Bh	 ;  Num 1 	4F		31h		Num End
+		db	082h	 ;  Num 2 	50		32h		Num Down
+		db	08Ch	 ;  Num 3 	51		33h		Num Pg Dn
+		db	08Eh	 ;  Num 0 	52		30h		Num Insert
+		db	0FFh	 ;  Num . 	53		2Eh		Num Del
+		db	01Ch	 ;  Pr Scr 	54  		SYS REQUEST
+		db	000h	 ; 	     	55
+		db	000h	 ;	     	56
+		db	019h	 ;  F11	 	57
+		db	01Ah	 ;  F12	 	58
+		db	000h	 ;   	 	59
+		db	000h	 ;   		5A
+		db	000h	 ;   	 	5B
+		db	000h	 ;   	 	5C
+		db	000h	 ;   	 	5D
+		db	000h	 ;   	 	5E
+		db	000h	 ;   	 	5F   ; The following chars are subs from table2
+		db	00Eh	 ;  Ins	 	60	Cursor pad
+		db	00Bh	 ;  End	 	61	Cursor pad
+		db	002h	 ;  Down	62	Cursor pad
+		db	00Ch	 ;  PgDn	63	Cursor pad
+		db	003h	 ;  Left	64	Cursor pad
+		db	000h	 ;	     	65
+		db	004h	 ;  Right	66	Cursor pad
+		db	006h	 ;  Home	67	Cursor pad
+		db	001h	 ;  Up		68	Cursor pad
+		db	005h	 ;  PgUp	69	Cursor pad
+		db	07Fh	 ;  Delete  6A	Cursor pad
+		db	0AFh	 ;  /	 	6B  Num Pad
+		db	08Dh	 ;  ENTER	6C  Num Pad
+		db	0h	 ;			6D
+		db      0h	 ;	     	6E
+		db      0h	 ;	 		6F
+		db      0h	 ;	 		70
+		db      0h	 ;	 		71
+		db      0h	 ;	 		72
+		db      0h	 ;	 		73
+		db      0h	 ;	 		74
+		db      0h	 ;	 		75
+		db      0h	 ;	 		76
+		db      0h	 ;	 		77
+		db      0h	 ;	 		78
+		db      0h	 ;	 		79
+		db      0h	 ;	 		7A
+		db      0h	 ;	 		7B
+		db      0h	 ;	 		7C
+		db      0h	 ;	 		7D
+		db      0h	 ;	 		7E
+		db      0h	 ;	 		7F
+
+;************************************************************************
+;
+;  This table does an initial character translation from the characters
+;  provided by the keyboard.  The Kbd translates incoming keystrokes
+;  from the original scan set 2 for the IBM PC.  All PCs are are set to this
+;  by default.  Keys on the 101 keyboard that were common to the numeric
+;  keypad use a two character escape sequence begining with E0 hex.
+;  If we see an E0 hex we scan this table and provide the translation
+;  to another unique character which is looked up in the primary
+;  table above.  This gives us unique single characters for every key.
+;
+;************************************************************************
+
+nKbdTable2 EQU 16
+
+KbdTable2	  db   052h,  060h    ; Insert
+		  db   04Fh,  061h    ; End
+		  db   050h,  062h    ; Down
+		  db   051h,  063h    ; Pg Down
+		  db   04Bh,  064h    ; Left
+		  db   04Dh,  066h    ; Rite
+		  db   047h,  067h    ; Home
+		  db   048h,  068h    ; Up
+		  db   049h,  069h    ; Pg Up
+		  db   053h,  06Ah    ; Delete
+
+		  db   037h,  06Bh    ; Num /
+		  db   01Ch,  06Ch    ; Num ENTER
+
+		  db   038h,  070h    ; Right ALT DOWN	    These are special cause we
+		  db   01Dh,  071h    ; Right Ctrl DOWN	track UP & DOWN!!!
+		  db   0B8h,  0F0h    ; Right ALT UP
+		  db   09Dh,  0F1h    ; Right Ctrl UP
+
+
+;************************************************************************
+;
+;  This table provides shift level values for codes from the primary KbdTable.
+;  In Shift-ON state, keycodes 21 - 7E hex are translated through this table.
+;  In CAPS LOCK state, codes 61h to 7Ah are translated through this table
+;  In NUM LOCK state, codes with High Bit set are translated
+;
+;************************************************************************
+
+KbdTableS 	db      0               ; 	00
+		db	38h		; 	01  Up   8  Numeric pad
+		db	32h		; 	02  Dn   2  Numeric pad
+		db	34h		; 	03  Left 4  Numeric pad
+		db	36h		; 	04  Rite 6  Numeric pad
+		db	39h		; 	05  PgUp 9  Numeric pad
+		db	37h		; 	06  Home 7  Numeric pad
+		db	07h		; 	07
+		db	08h		; 	08
+		db	09h		; 	09
+		db	0Ah		; 	0A
+		db	31h		; 	0B  End  1  Numeric Pad
+		db	33h		; 	0C  PgDn 3  Numeric pad
+		db	0Dh		; 	0D
+		db	30h		; 	0E  Ins  0  Numeric pad
+		db	0Fh		; 	0F
+		db	10h		; 	10
+		db	11h		; 	11
+		db	12h		; 	12
+		db	13h		; 	13
+		db	14h		; 	14
+		db	15h		; 	15
+		db	16h		; 	16
+		db	17h		; 	17
+		db	18h		; 	18
+		db	18h		; 	19
+		db	1Ah		; 	1A
+		db	1Bh		; 	1B
+		db	1Ch		; 	1C
+		db	1Dh		; 	1D
+		db	1Eh		; 	1E
+		db	35h		; 	1F	Blnk 5  Numeric pad
+		db	20h		; 	20
+		db	21h		; 	21
+		db	22h		; 	22
+		db	23h		; 	23
+		db	24h		; 	24
+		db	25h		; 	25
+		db	26h		; 	26
+		db	22h		; 	27  '  "
+		db	28h		; 	28
+		db	29h		; 	29
+		db	2Ah		; 	2A
+		db	2Bh		; 	2B
+		db	3Ch		; 	2C  ,  <
+		db	5Fh		; 	2D  -  _
+		db	3Eh		; 	2E  .  >
+		db	3Fh		; 	2F  /  ?
+		db	29h		; 	30  0  )
+		db	21h		; 	31  1  !
+		db	40h	 	; 	32  2  @
+		db	23h	 	; 	33  3  #
+		db	24h		; 	34  4  $
+		db	25h	 	; 	35  5  %
+		db	5Eh	 	; 	36  6  ^
+		db	26h	 	; 	37  7  &
+		db	2Ah	 	; 	38  8  *
+		db	28h	 	; 	39  9  (
+		db	3Ah	 	; 	3A
+		db	3Ah	 	; 	3B  ;  :
+		db	3Ch	 	; 	3C
+		db	2Bh	 	; 	3D  =  +
+		db	3Eh	 	; 	3E
+		db	3Fh	 	; 	3F
+		db	40h	 	; 	40
+		db	41h	 	; 	41
+		db	42h	 	; 	42
+		db	43h	 	; 	43
+		db	44h	 	; 	44
+		db	45h	 	; 	45
+		db	46h	 	; 	46
+		db	47h	 	; 	47
+		db	48h	 	; 	48
+		db	49h	 	; 	49
+		db	4Ah	 	; 	4A
+		db	4Bh	 	; 	4B
+		db	4Ch	 	; 	4C
+		db	4Dh	 	; 	4D
+		db	4Eh	 	; 	4E
+		db	4Fh	 	; 	4F
+		db	50h	 	; 	50
+		db	51h	 	; 	51
+		db	52h	 	; 	52
+		db	53h	 	; 	53
+		db	54h	 	; 	54
+		db	55h	 	; 	55
+		db	56h	 	; 	56
+		db	57h	 	; 	57
+		db	58h	 	; 	58
+		db	59h	 	; 	59
+		db	5Ah	 	; 	5A
+		db	7Bh	 	; 	5B  [  {
+		db	7Ch	 	; 	5C  \  |
+		db	7Dh	 	; 	5D  ]  }
+		db	5Eh	 	; 	5E
+		db	5Fh	 	; 	5F
+		db	7Eh	 	; 	60  `  ~
+		db	41h	 	; 	61  a  A
+		db	42h	 	; 	62	b  B
+		db	43h	 	; 	63	c  C
+		db	44h	 	; 	64	d  D
+		db	45h	 	; 	65	e  E
+		db	46h	 	; 	66	f  F
+		db	47h	 	; 	67	g  G
+		db	48h	 	; 	68	h  H
+		db	49h	 	; 	69	i  I
+		db	4Ah	 	; 	6A	j  J
+		db	4Bh	 	; 	6B	k  K
+		db	4Ch	 	; 	6C	l  L
+		db	4Dh	 	; 	6D	m  M
+		db	4Eh	 	; 	6E	n  N
+		db	4Fh	 	; 	6F	o  O
+		db	50h	 	; 	70	p  P
+		db	51h	 	; 	71	q  Q
+		db	52h	 	; 	72	r  R
+		db	53h	 	; 	73	s  S
+		db	54h	 	; 	74	t  T
+		db	55h	 	; 	75	u  U
+		db	56h	 	; 	76	v  V
+		db	57h	 	; 	77  w  W
+		db	58h	 	; 	78  x  X
+		db	59h	 	; 	79  y  Y
+		db	5Ah	 	; 	7A  z  Z
+		db	7Bh	 	; 	7B
+		db	7Ch	 	; 	7C
+		db	7Dh	 	; 	7D
+		db	7Eh	 	; 	7E
+		db	2Eh	 	; 	7F	Del  .  Numeric Pad
+
+;************************************************************************
+;
+;  The following equates are for the hardware handling code.
+;  8042 Status Byte, Port Hex 0064 Read
+;
+;************************************************************************
+
+STATUSPORT		EQU 64h
+COMMANDPORT		EQU 64h
+DATAPORT		EQU 60h
+
+PARITYERROR		EQU 10000000b
+GENERALTIMEOUT		EQU 01000000b
+AUXOUTBUFFFULL		EQU 00100000b
+INHIBITSWITCH		EQU 00010000b
+COMMANDDATA		EQU 00001000b
+SYSTEMFLAG		EQU 00000100b
+INPUTBUFFFULL		EQU 00000010b
+OUTPUTBUFFFULL		EQU 00000001b
+RESET_KEYBOARD		EQU 0FFh
+KEYBOARD_OVERRUN        EQU 0FFh
+BAT_COMPLETE		EQU 0AAh
+
+_DATA ENDS
+
+
+_TEXT SEGMENT DWORD PUBLIC USE32 'CODE'
+
+   ASSUME  cs:_TEXT, ds:_DATA, es:_DATA, fs:_DATA
+
+;************************************************************************
+;
+; ISR for the keyboard.  This is vectored to by the processor whenever
+; IRQ 1 fires off.  This puts the single byte from the 8042
+; KBD processor into the buffer.
+;
+;************************************************************************
+
+   extrn  KeyboardEvent: near
+   extrn  NestedInterrupts: dword
+   extrn  processor_table: dword
+   extrn  interruptInRealMode: dword
+   extrn  inRealModeFlag: dword
+
+save_context    macro
+	push     eax
+	push     ebx
+	push     ecx
+	push     edx
+	push     ebp
+	push     esi
+	push     edi
+	push     ds
+	push     es
+	push     fs
+
+	endm
+
+restore_context      macro
+	pop     fs
+	pop     es
+	pop     ds
+	pop     edi
+	pop     esi
+	pop     ebp
+	pop     edx
+	pop     ecx
+	pop     ebx
+	pop     eax
+	endm
+
+Synch   macro
+	LOCAL L1, L2, L3
+
+	jmp	short L1
+L1:
+	jmp	short L2
+L2:
+	endm
+
+   align 16
+public KeyboardInterrupt
+KeyboardInterrupt proc
+	    cmp      ss:inRealModeFlag, 0
+	    jz       NotInRealMode
+
+	    push   eax
+
+	    mov    al, 20h    ; EOI the PIC
+	    out    20h, al
+	    Synch
+
+	    in     al, STATUSPORT
+	    test   al, OUTPUTBUFFFULL
+	    jz     RealModeExit
+
+	    in     al, DATAPORT	      ; Read byte
+
+RealModeExit:
+	    pop    eax
+
+	    inc    ss:interruptInRealMode
+	    iretd
+
+NotInRealMode:
+	    save_context
+	    cli
+
+	    mov    eax, CR2
+	    inc    NestedInterrupts[eax * 4]
+	    inc    processor_table[eax * 4].totalInterrupts
+
+	    mov    al, 20h    ; EOI the PIC
+	    out    20h, al
+	    Synch
+
+	    in     al, STATUSPORT
+	    test   al, OUTPUTBUFFFULL
+	    jz     KeyboardInterruptExit
+
+	    test   al, PARITYERROR
+	    jnz    ErrorResetKeyboard
+
+	    test   al, GENERALTIMEOUT
+	    jnz    ErrorResetKeyboard
+
+	    in     al, DATAPORT	      ; Read byte
+	    cmp    al, KEYBOARD_OVERRUN
+	    je     ErrorResetKeyboard
+
+GetRawCount:
+	    mov    esi, RawKBIn	      ; Set up pointer
+	    mov    ebx, RawCount      ; See if buffer full
+	    cmp    ebx, 20h	      ; Buffer size
+	    je     KbdEnd      	      ; Buffer is full - Don't save it
+
+	    mov    byte ptr [esi], al ; Move into buf
+	    inc    RawCount	      ; One more in the buf
+	    inc    esi		      ; Next byte in
+	    cmp    esi, offset RawBuffer + 20h ; past end yet?
+	    jb     KbdEnd
+
+	    mov    esi, offset RawBuffer  ; Back to beginning of buffer
+KbdEnd:
+	    mov    RawKBIn, esi	      ; Set up pointer for next time
+
+	    call   TranslateRawKeyboard
+	    call   ReadKeyboardFinal
+	    or     eax, eax
+	    jz     KeyboardInterruptExit
+
+	    push   eax
+	    call   KeyboardEvent
+	    add    esp, 4
+
+	    jmp    KeyboardInterruptExit
+
+ErrorResetKeyboard:
+	    call   ResetKeyboard
+
+KeyboardInterruptExit:
+	    mov    eax, CR2
+	    dec    NestedInterrupts[eax * 4]
+
+	    restore_context
+	    iretd
+
+KeyboardInterrupt endp
+
+;************************************************************************
+;
+;  Debugger NonInterruptHandler for the keyboard.
+;
+;  NOTE:  must be called with interrupts disabled
+;
+;  returns EAX = 1 (pending interrupt was serviced)
+;          EAX = 0 (no pending interrupt)
+;
+;************************************************************************
+
+   align 16
+public PollKeyboard
+PollKeyboard  proc
+	    in     al, 20h
+	    and    al, 2
+	    jz     NoKeyboardInterruptPending
+
+	    save_context
+
+	    in     al, STATUSPORT
+	    test   al, OUTPUTBUFFFULL
+	    jz     PollNoKey
+
+	    test   al, PARITYERROR
+	    jnz    PollResetKeyboard
+
+	    test   al, GENERALTIMEOUT
+	    jnz    PollResetKeyboard
+
+	    in     al, DATAPORT	      ; Read byte
+	    cmp    al, KEYBOARD_OVERRUN
+	    jne    PollGetRawCount
+
+PollResetKeyboard:
+	    call   ResetKeyboard
+	    jmp    PollNoKey
+
+PollGetRawCount:
+	    mov    esi, RawKBIn	      ; Set up pointer
+	    mov    ebx, RawCount      ; See if buffer full
+	    cmp    ebx, 20h	      ; Buffer size
+	    je     KbdEnd      	      ; Buffer is full - Don't save it
+
+	    mov    byte ptr [esi], al ; Move into buf
+	    inc    RawCount	      ; One more in the buf
+	    inc    esi		      ; Next byte in
+	    cmp    esi, offset RawBuffer + 20h ; past end yet?
+	    jb     KbdNonIntEnd
+
+	    mov    esi, offset RawBuffer  ; Back to beginning of buffer
+KbdNonIntEnd:
+	    mov    RawKBIn, esi	      ; Set up pointer for next time
+
+	    call   TranslateRawKeyboard
+
+	    call   UnmaskKeyboard
+	    call   MaskKeyboard
+
+	    mov    al, 20h    ; EOI the PIC
+	    out    20h, al
+	    Synch
+
+	    restore_context
+	    mov    eax, 1
+	    ret
+
+NoKeyboardInterruptPending:
+	    xor    eax, eax
+	    ret
+
+PollNoKey:
+	    call   UnmaskKeyboard
+	    call   MaskKeyboard
+
+	    mov    al, 20h    ; EOI the PIC
+	    out    20h, al
+	    Synch
+
+	    restore_context
+	    xor    eax, eax
+	    ret
+
+
+PollKeyboard endp
+
+public MaskKeyboard
+MaskKeyboard proc
+	    in    al, 21h
+	    or    al, 2
+	    out   21h, al
+	    Synch
+
+	    ret
+MaskKeyboard endp
+
+   align 16
+public UnmaskKeyboard
+UnmaskKeyboard proc
+	    in    al, 21h
+	    and   al, NOT 2
+	    out   21h, al
+	    Synch
+
+	    ret
+UnmaskKeyboard endp
+
+;************************************************************************
+;
+;  This gets one byte from the Kbd Buffer and returns it in AL
+;  Zero is returned if no key exists.
+;
+;************************************************************************
+
+   align 16
+public ReadKeyboardBuffer
+ReadKeyboardBuffer proc
+	    mov   esi, RawKBOut		; Get ptr to next char to come out
+	    mov   eax, RawCount		; See if there are any bytes
+	    cmp   eax, 0
+	    je    RdKBDone 		; No - Leave 0 in EAX
+
+	    dec   RawCount		; Yes - make cnt right
+	    xor   eax, eax
+	    mov   al, byte ptr [esi]	; Put byte in AL
+	    inc   esi
+	    cmp   esi, offset RawBuffer + 20h ; past end yet?
+	    jb    RdKBDone
+
+	    mov   esi, offset RawBuffer	; Back to beginning of buffer
+RdKBDone:
+	    mov   RawKBOut, esi		; Save ptr to next char to come out
+
+	    ret
+ReadKeyboardBuffer endp
+
+;************************************************************************
+;
+; Reads and processes all bytes from the RAW keyboard buffer
+; and places them and their proper state bytes and into the next DWord
+; in the translated buffer if it is an edit key.
+;
+;************************************************************************
+
+   align 16
+public TranslateRawKeyboard
+TranslateRawKeyboard proc
+	    call  ReadKeyboardBuffer
+	    cmp   EAX, 0
+	    je    TranslateDone	        ; No
+
+	    mov   bl, bKbdMode		; See if we are RAW... (for testing ONLY)
+	    cmp   bl, 1
+	    jne   KB001			; NO - keep going
+	    jmp   KB029A		; Yes, leave the key in AL for buffer
+
+	    ; Now we check to see if the byte is 0Eh which tells us
+	    ; this is a two key code that needs to be translated from
+	    ; our special table before processing.  This turns the
+	    ; two key code into a single code and sets a state
+	    ; bit to indicate this.
+
+KB001:
+	    cmp   dfPrefix, 1
+	    je    KB003
+	    cmp   al, 0E0h		; Key PREFIX???
+	    jne   KB006			; No
+	    mov   dfPrefix, 1		; Yes, We got an E0
+	    jmp   TranslateDone		;
+
+KB003:
+	    mov   dfPrefix, 0		; No prefix
+	    mov   esi, offset KbdTable2
+	    mov   ecx, nKbdTable2
+KB004:
+	    cmp   byte ptr [esi], al
+	    je	  KB005
+	    inc   esi			; Two byte further into table 2
+	    inc   esi
+	    dec   ecx
+	    jnz   KB004			; Go to next table entry
+	    jmp   TranslateDone		; No translation - ignore it
+
+KB005:
+	    inc   esi			; One byte further over to get Xlate byte
+	    xor   eax, eax
+	    mov   al, byte ptr [esi]	; Fall thru to check on char...
+
+	    ; This next section checks for special keys (shift, alt, etc.)
+	    ; BL has SHIFT state, CL has LOCK State, AL has byte from buffer.
+
+KB006:
+	    mov   dfPrefix, 0		; No prefix
+	    xor   ebx, ebx
+	    xor   ecx, ecx
+	    mov   bl, KbdState		; BL has Shift, Alt, Ctrl states
+	    mov   cl, KbdLock		; BH has Num, Caps, & Scroll Lock
+
+	    cmp   al, 45h 		; Key = NumLock ?
+	    jne   KB007			; NO...
+	    btc   ecx, NmLockBit	; Compliment bit
+	    jmp   KB022
+KB007:
+	    cmp   al, 3Ah 		; Caps Lock?
+	    jne   KB008
+	    btc   ecx, CpLockBit	; Compliment bit in BH
+	    jmp   KB022
+KB008:
+	    cmp   al, 46h 		; Scroll Lock?
+	    jne   KB009
+	    btc   ecx, ScLockBit	; Compliment bit in BH
+	    jmp   KB022
+KB009:
+	    cmp   al, 2Ah 		; Char Left Shift On?
+	    jne   KB010
+	    bts   ebx, ShftLeftBit
+	    jmp   KB021
+KB010:
+	    cmp   al, 36h 		; Right Shift On?
+	    jne   KB011
+	    bts   ebx, ShftRiteBit
+	    jmp   KB021
+KB011:
+	    cmp   al, 0AAh		; Left Shift Off?
+	    jne   KB012
+	    btr   ebx, ShftLeftBit
+	    jmp   KB021
+
+KB012:
+	    cmp   al, 0B6h		; Right Shift Off?
+	    jne   KB013
+	    btr   ebx, ShftRiteBit
+	    jmp   KB021
+
+KB013:
+	    cmp   al, 1Dh 		; Left Ctrl On?
+	    jne   KB014
+	    bts   ebx, CtrlLeftBit
+	    jmp   KB021
+
+KB014:
+	    cmp   al, 71h 		; Right Ctrl On?
+	    jne   KB015
+	    bts   ebx, CtrlRiteBit
+	    jmp   KB021
+
+KB015:
+	    cmp   al, 09Dh		; Left Ctrl Off?
+	    jne   KB016
+	    btr   ebx, CtrlLeftBit
+	    jmp   KB021
+
+KB016:
+	    cmp   al, 0F1h		; Right Ctrl Off?
+	    jne   KB017
+	    btr   ebx, CtrlRiteBit
+	    jmp   KB021
+KB017:
+	    cmp   al, 38h 		; Left Alt On?
+	    jne   KB018
+	    bts   ebx, AltLeftBit
+	    jmp   KB021
+KB018:
+	    cmp   al, 70h 		; Right Alt On?
+	    jne   KB019
+	    bts   ebx, AltRiteBit
+	    jmp   KB021
+KB019:
+	    cmp   al, 0B8h		; Left Alt Off?
+	    jne   KB020
+	    btr   ebx, AltLeftBit
+	    jmp   KB021
+KB020:
+	    cmp   al, 0F0h		; Right Alt Off?
+	    jne   KB023
+	    btr   ebx, AltRiteBit
+KB021:
+	    mov   KbdState, bl		; Put Kbd Shift State back
+	    jmp   TranslateDone 	;
+KB022:
+	    mov   KbdLock, cl		; Put Kbd Lock State back
+	    call  SetKeyboardLEDs	; Set LEDs on keyboard
+	    jmp   TranslateRawKeyboard
+
+	    ; We jumped here if it wasn't a key that is specially handled
+
+KB023:
+	    test  al, 80h		; Check for high bit (key-up code)
+	    jnz	  TranslateDone 	; Go back, else fall through
+
+	    or    al, al		; Zero not a valid code
+	    jz    TranslateDone 	; Go back, else fall through
+
+	    ; If we got here, IT'S AN EDIT KEY DOWN!
+	    ; Now we lookup the code and do a single translation.
+
+	    and   eax, 07Fh			; Chop off any upper bit junk
+	    mov   esi, offset KbdTable	        ; Set up to index table
+	    mov   dl, byte ptr [esi + eax]	; Save in DL
+	    or    al, al			; Zero not a valid code
+	    jz    TranslateDone 		; Go back, else fall through
+
+	    mov   cl, KbdState			; Get Shift state
+	    mov   ch, KbdLock			; Get lock state
+
+	    ; To let the user know if the key came from the Numeric
+	    ; keypad we set the high bits in the first translation
+	    ; table for these keys.  This next piece of code tests for it
+	    ; and sets the low bit in DH if it its. DH is later moved
+	    ; into the high byte of the returned key code.
+
+	    mov   dh, 0
+	    test  dl, 80h			; High bit set?
+	    jz    KB024
+	    mov   dh, 1				; Indicates key came numeric pad
+
+	    ; See if shift key is down and shift all keys it is is
+KB024:
+	    test  cl, ShftDownMask	; Either shift key down?
+	    jz    KB025			; No, go look for locks
+	    cmp   dl, 21h		; Is key < ' '
+	    jb    KB025			; Yes, look for locks
+	    cmp   dl, 7Eh		; Is key > '~'
+	    ja    KB025			; Yes, look for locks
+	    jmp   KB027			; In-range, go do the translation
+
+KB025:      ; See if key is from Numerc Keypad (high bit will be set)
+
+	    test  dl, 80h		; High bit set?
+	    jz    KB026			; No
+	    and   ch, NmLockMask	; Yes, is NumLock ON
+	    jz    KB026			; No
+	    cmp   dl, 0ADh		; Yes, but don't shift DASH (-) Special Case
+	    je    KB026
+	    jmp   KB027			; Do the shift Xlation
+
+KB026:	    ; See if Caps Lock is on and if key is between 61h and 7Ah
+	    ; do the translation
+
+	    test  ch, CpLockMask	; Is CpLock ON
+	    jz    KB029			; No
+	    cmp   dl, 61h		; Is key >= 'a'
+	    jb    KB029			; No
+	    cmp   dl, 7Ah		; Is key <= 'z'
+	    ja    KB029			; No
+
+	    ; Fall through to do the translation
+KB027:	    ; Do the shift translation and leave in DL
+
+	    mov	  al, dl		    ; Put in AL
+	    and   eax, 07Fh		    ; Chop all above 7 bits
+	    mov   esi, offset KbdTableS	    ; Set up to index table
+	    mov   dl, byte ptr [esi + eax]  ; Save in DL
+
+	    ; Fall though to put key in final buffer
+	    ; Place DL in the LOW byte of the DWord to go into the
+	    ; final buffer (the data the user will get)
+	    ; If the high bit is set coming from the primary
+	    ; translation table, this means the key was from the
+	    ; numeric keypad so we set the numpad bit in status
+	    ; which should already be in dh
+
+KB029:
+	    mov   ah, dh
+	    shl   eax, 8		; Num Pad indicator
+	    mov   al, KbdState		; Get Shift state
+	    mov   ah, KbdLock		; Get lock state
+	    shl   eax, 8
+	    and   dl, 7Fh		; Lop of high bit (if there)
+	    mov   al, dl
+
+	    ; EAX now has the buffered info for the user (Key, Shifts & Locks)
+	    ; Now we put it in the DWord buffer if it is NOT a GLOBAL.
+	    ; If global, we put it in dGlobalKey.
+
+	    test  ah, CtrlDownMask	; Either Ctrl Down?
+	    jz    KB029A		; No
+	    test  ah, AltDownMask	; Either Alt Down?
+	    jz    KB029A		; No
+
+	    ; It IS a global key request!
+
+	    mov   dGlobalKey, eax	; Save it
+	    jmp   TranslateRawKeyboard	; Back for more (if there is any)
+
+KB029A:
+	    ;
+	    ;  output translations to the final keyboard buffer
+	    ;
+
+	    mov   ebx, FinalCount	; See if buffer full
+	    cmp   ebx, 64		; number of DWords in final buffer
+	    je    TranslateDone 	; Buffer is FULL..
+	    mov   esi, FinalKBIn		; Get ptr to next IN to final buffer
+	    mov   [esi], eax		; Move into buf
+	    inc   FinalCount		; One more DWord in the buf
+	    add   esi, 4
+	    cmp   esi, offset FinalBuffer + 100h ; 40h * 4
+	    jb    KB030
+	    mov   esi, offset FinalBuffer	; Reset to buf beginning
+
+KB030:
+	    mov   FinalKBIn, esi		; Save ptr to next in
+	    jmp   TranslateRawKeyboard
+
+
+TranslateDone:
+	    xor   eax, eax
+	    ret
+
+TranslateRawKeyboard endp
+
+;************************************************************************
+;
+;  Returns a keyboard code from FINAL keyboard buffer.
+;  Returns zero in EAX if buffer is empty.
+;
+;  IN :  Nothing
+;  OUT:  EAX has Key or 0 if none
+;  USED: EAX, ESI
+;  MODIFIES: FinalCount, FinalKBOut
+;
+;************************************************************************
+
+   align 16
+public ReadKeyboardFinal
+ReadKeyboardFinal proc
+	    push  esi
+	    pushfd
+	    cli
+
+	    mov   eax, FinalCount
+	    cmp   eax, 0
+	    je    KBFDone		     ; Nothing final buffer
+
+	    dec   FinalCount		     ; One more DWord in the buf
+	    mov   esi, FinalKBOut		     ; ptr to next code out
+	    mov   eax, [esi]		     ; Put it in EAX
+	    add   esi, 4		     ; Next code please...
+	    cmp   esi, offset FinalBuffer + 100h ; Past end of buf?
+	    jb    KBF02			     ; No
+
+	    mov	  esi, offset FinalBuffer    ; Yes, Reset to beginning
+KBF02:
+	    mov   FinalKBOut, esi	     ; Update FinalKBOut
+KBFDone:
+
+	    popfd
+	    pop   esi
+	    ret
+
+ReadKeyboardFinal endp
+
+public ResetKeyboardBIOSData
+ResetKeyboardBIOSData  proc
+		mov   edi, 417h   ; BIOS Keyboard Data Area
+		mov   byte ptr [edi], 0      ; keyboard control and state flags
+		mov   byte ptr [edi + 1], 0  ; are at 40:17h thru 40:19h
+		mov   byte ptr [edi + 2], 0  ; zero flags
+
+		;
+		;  keyboard head/tail are at 40:1Ah (head) and
+		;  40:1Ch (tail).  reset pointers
+		;
+		mov   edi, 41Ah      ; read keyboard head pointer
+		mov   eax, [edi]     ; write to tail pointer
+		mov   [edi + 2], eax
+		ret
+
+ResetKeyboardBIOSData endp
+
+;************************************************************************
+;
+;   This sets the Keyboard Scan Set to #2 with 8042 interpretation ON
+;
+;************************************************************************
+
+   align 16
+public ResetKeyboard
+ResetKeyboard proc
+		save_context
+		pushfd
+		cli
+
+		in    al, 21h
+		or    al, 2
+		out   21h, al    ; mask IRQ 1
+
+		call  KeyboardDisable
+		mov   al, RESET_KEYBOARD
+		out   DATAPORT, al
+
+		mov   ecx, 200
+BATStatusLoop:
+		dec   ecx
+		jz    BATTimeOut
+
+		call  OutBuffFull
+
+		in    al, DATAPORT
+		cmp   al, BAT_COMPLETE
+		jne   BATStatusLoop
+BATTimeOut:
+		call  KeyboardEnable
+
+		call  InBuffEmpty    ; Wait for Input Buffer to Empty
+		mov   al, 0FAh	     ; Set ALL keys typematic/make/break
+		out   DATAPORT, al   ; Send Command to KBD (not 8042)
+
+		call  OutBuffFull    ; Eat response
+		in    al, DATAPORT
+
+		call  InBuffEmpty    ; Wait for Input Buffer to Empty
+		mov   al, 0F0h	     ; Set Scan code set
+		out   DATAPORT, al   ; Send Command to KBD (not 8042)
+
+		call  OutBuffFull    ; Eat response
+		in    al, DATAPORT
+
+		call  InBuffEmpty    ; Wait for Input Buffer to Empty
+		mov   al, 02h	     ; Scan set 2
+		out   DATAPORT, al   ; Send Command
+
+		call  OutBuffFull    ; Eat response
+		in    al, DATAPORT
+
+		call  InBuffEmpty     ; Wait for Input Buffer to Empty
+		mov   al, 060h	      ; Set up to write 8042 command byte
+		out   COMMANDPORT, al ; Send Command
+
+		call  InBuffEmpty     ; Wait for Input Buffer to Empty
+		mov   al, 45h	      ; Enable IBM Xlate
+		out   DATAPORT, al    ; Send Command
+
+		; global translate and state key variables
+
+		mov   dGlobalKey, 0	  ; Global Key Found, else 0
+		mov   dfPrefix, 0
+		mov   bKbdMode, 0	  ; ZERO for Cooked, 1 for RAW (testing)
+		mov   KbdState, 0	  ; State Mask
+		mov   KbdLock, 0	  ; Lock Mask
+
+		;  Raw Keyboard Buffer
+
+		mov   RawCount, 0
+		mov   RawKBIn, offset RawBuffer   ; ptr to next char going in
+		mov   RawKBOut, offset RawBuffer  ; ptr to next char going out
+
+		;  Final Keyboard Buffer
+
+		mov   FinalCount, 0
+		mov   FinalKBIn, offset FinalBuffer	; ptr to codes comming in
+		mov   FinalKBOut, offset FinalBuffer	; ptr to codes going out
+
+		call  SetKeyboardLEDs
+
+		call  ResetKeyboardBIOSData
+
+		in    al, 21h
+		and   al, NOT 2
+		out   21h, al         ; unmask irq1
+
+		popfd
+		restore_context
+		ret
+
+ResetKeyboard endp
+
+;************************************************************************
+;
+;   This tells the 8042 Controller to Disable the Keyboard device.
+;
+;************************************************************************
+
+   align 16
+public KeyboardDisable
+KeyboardDisable proc
+
+		push   eax
+		call   InBuffEmpty	; Wait for Input Buffer to Empty
+		mov    al, 0ADh		; Set Command to "Write the 8042 Command Byte"
+		out    COMMANDPORT, al	; Send Command
+		call   InBuffEmpty	; Wait for Input Buffer to Empty
+		pop    eax
+		ret
+
+KeyboardDisable endp
+
+;************************************************************************
+;
+;   This tells the 8042 Controller to Enable the Keyboard Device.
+;
+;************************************************************************
+
+   align 16
+public KeyboardEnable
+KeyboardEnable  proc
+
+		call  InBuffEmpty	; Wait for Input Buffer to Empty
+		mov   al, 0AEh		; Set Command to "Write the 8042 Command Byte"
+		out   COMMANDPORT, al	; Send Command
+		call  InBuffEmpty	; Wait for Input Buffer to Empty
+		ret
+
+KeyboardEnable  endp
+
+;************************************************************************
+;
+;   This tells the 8042 Controller to Change the Typematic Rate.
+;
+;************************************************************************
+
+   align 16
+public KeyboardTypematic
+KeyboardTypematic  proc
+
+		call  InBuffEmpty	; Wait for Input Buffer to Empty
+		mov   al, 0AEh		; Set Command to Set Typematic Rate
+
+		out   DATAPORT, al	; Send Command
+		call  InBuffEmpty	; Wait for Input Buffer to Empty
+
+		call  OutBuffFull       ; Eat response
+		in    al, DATAPORT
+
+		call  InBuffEmpty	; Wait for Input Buffer to Empty
+		mov   al, 00h		; Set Rate
+
+		out   DATAPORT, al	; Send Command
+		call  InBuffEmpty	; Wait for Input Buffer to Empty
+
+		call  OutBuffFull       ; Eat response
+		in    al, DATAPORT
+
+		ret
+
+KeyboardTypematic  endp
+
+;************************************************************************
+;
+;  Waits until the 8042 Input Buffer is EMPTY
+;
+;************************************************************************
+
+   align 16
+public InBuffEmpty
+InBuffEmpty proc
+
+		push    eax
+		push    ecx
+		mov     ecx, 2FFFFh 			;check 128k times
+IBE:
+		jmp     IBE1
+IBE1:
+		jmp     IBE2
+IBE2:
+		in      al, STATUSPORT		;Read Status Byte into AL
+		test    al, INPUTBUFFFULL	;Test The Input Buffer Full Bit
+		loopnz  IBE
+		pop     ecx
+		pop     eax
+		ret
+
+InBuffEmpty endp
+
+;************************************************************************
+;
+;  Waits until the 8042 Output Buffer is FULL so we can read it
+;
+;  Before calling this makes sure that the Keyboard interrupts have been
+;  masked so the keyboard interrupt doesn't eat the byte you're
+;  looking for!!
+;
+;************************************************************************
+
+   align 16
+public OutBuffFull
+OutBuffFull proc
+
+		push    eax
+		push    ecx
+		mov     ecx, 2FFFFh 			;check 128k times
+OBF:
+		jmp     OBF1
+OBF1:
+		jmp     OBF2
+OBF2:
+		in      al, STATUSPORT	        ;Read Status Byte into AL
+		test    al, OUTPUTBUFFFULL	;Test The Output Buffer Full Bit
+		loopz   OBF
+		pop     ecx
+		pop     eax
+		ret
+
+OutBuffFull endp
+
+;************************************************************************
+;
+;  This sets the indicators on the keyboard based on data in KbdState
+;
+;************************************************************************
+
+   align 16
+public SetKeyboardLEDs
+SetKeyboardLEDs proc
+
+		push  eax
+
+		call  InBuffEmpty	; Wait for Input Buffer to Empty
+		mov   al, 0EDh		; Set/Reset Status Indicators
+		out   DATAPORT, al 	; Send KBD Command
+
+		call  OutBuffFull	; Eat response
+		in    al, DATAPORT
+
+		call  InBuffEmpty	; Wait for Input Buffer to Empty
+		mov   al, KbdLock	; Get Current Lock Status Byte
+		and   al, 00000111b	; Mask all but low order 3 bits
+		out   DATAPORT, al	; Send KBD Command
+
+		call  OutBuffFull	; Eat response
+		in    al, DATAPORT
+
+		pop   eax
+		ret
+
+SetKeyboardLEDs endp
+
+
+_TEXT ENDS
+
+END
+

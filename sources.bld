@@ -1,0 +1,182 @@
+
+
+#**************************************************************************
+#
+#  MANOS.EXE, LOADER.EXE, INIT.EXE, and MSTUB.EXE Build Script
+#
+#**************************************************************************
+#
+#   AUTHOR   :  Jeff V. Merkey
+#   FILE     :  SOURCES.BLD
+#   DESCRIP  :  MODULES Script for MANOS Operating System
+#   DATE     :  March 9, 1998
+#
+#**************************************************************************
+
+
+H_FILES = \
+	CTYPE.H     \
+	EMIT.H      \
+	EXTRNVAR.H  \
+	HAL.H       \
+	KEYBOARD.H  \
+	STDIO.H     \
+	TSS.H       \
+	UNI.H       \
+	LOADER.H    \
+	PAGE.H      \
+	XCALL.H     \
+	DOS.H       \
+	STDLIB.H    \
+	KERNEL.H    \
+	CHAPTER.H   \
+	TYPES.H     \
+	STDARG.H    \
+	MPT.H       \
+	DOSFILE.H   \
+	INDEX.H     \
+	BYTE.H      \
+	MALLOC.H    \
+	FREE.H      \
+	MMU.H       \
+	GLOBALS.H   \
+	NEEXE.H     \
+	SCREEN.H    \
+	STRING.H    \
+	MPS.H       \
+	WINDOW.H    \
+	PEEXE.H     \
+	MAH.H       \
+	OS.H        \
+	TIMER.H     \
+	MAT.H       \
+	RANDOM.H    \
+	MENU.H      \
+	VERSION.H   \
+	BOOK.H      \
+	TREES.H     \
+	RLOCK.H     \
+	EVENT.H     \
+	IFS.H       \
+	DPARSE.H    \
+	CMD.H       \
+	START.H     \
+	TRACKING.H  \
+	DEBUG.H     \
+	BUS.H       \
+	IA32.H      \
+	DEBCMD.H    \
+	SLD.H       \
+	ALTDEBUG.H  \
+	SYMBOLS.H   \
+	EXPORTS.H   \
+	CODEVIEW.H  \
+	LINE.H      \
+	DEBKERN.H
+
+INC_FILES =         \
+	dos.inc     \
+	hal.inc     \
+	kernel.inc  \
+	version.inc \
+	ia32.inc
+
+INIT_FILES =        \
+	init.386
+
+STUB_FILES =        \
+	mstub.386
+
+LOADER_FILES =       \
+	lloader.386  \
+	c0ntw.386    \
+	lscreena.386 \
+	keyrst.386   \
+	cloader.c    \
+	ldosfile.c   \
+	lformat.c
+#
+#   startup.386 must be the first entry on MANOS_FILES, do not change
+#
+
+MANOS_FILES =       \
+       startup.386  \
+       c0ntw.386    \
+       keyboard.386 \
+       screena.386  \
+       dma.386      \
+       context.386  \
+       lock.386     \
+       optkern.386  \
+       cinit.c      \
+       kernel.c     \
+       screen.c     \
+       express.c    \
+       debug.c      \
+       unasm.c      \
+       format.c     \
+       mps.c        \
+       int.c        \
+       mem.c        \
+       mpt.c        \
+       mah.c        \
+       mat.c        \
+       chapter.c    \
+       page.c       \
+       index.c      \
+       malloc.c     \
+       byte.c       \
+       random.c     \
+       hal.c        \
+       proc.c       \
+       process.c    \
+       command.c    \
+       dosfile.c    \
+       ctimer.c     \
+       sema.c       \
+       mmu.c        \
+       codeview.c   \
+       loader.c     \
+       pedump.c     \
+       exedump.c    \
+       objdump.c    \
+       common.c     \
+       peutil.c     \
+       window.c     \
+       menu.c       \
+       dll.c        \
+       monitor.c    \
+       lowmem.c     \
+       highmem.c    \
+       bus.c        \
+       trees.c      \
+       fileio.c     \
+       rlock.c      \
+       event.c      \
+       ifs.c        \
+       dparse.c     \
+       cmd.c        \
+       start.c      \
+       tracking.c   \
+       debmps.c     \
+       tsspool.c    \
+       xcall.c      \
+       ia32.c       \
+       sld.c        \
+       debcmd.c     \
+       accel.c      \
+       speed.c      \
+       startlib.c   \
+       altdebug.c   \
+       symbols.c    \
+       exports.c    \
+       mutex.c      \
+       rmutex.c     \
+       debkern.c    \
+       rwlock.c
+
+
+
+
+
+

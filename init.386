@@ -1,0 +1,2944 @@
+
+
+;***************************************************************************
+;
+;   Copyright (c) 1997, 1998 Timpanogas Research Group, Inc.  All Rights
+;                            Reserved.
+;
+;   This program is an unpublished work of TRG, Inc. and contains
+;   trade secrets and other proprietary information.  Unauthorized
+;   use, copying, disclosure, or distribution of this file without the
+;   consent of TRG, Inc. can subject the offender to severe criminal
+;   and/or civil penalities.
+;
+;
+;   AUTHOR   :  Jeff V. Merkey
+;   FILE     :  INIT.386
+;   DESCRIP  :  Real Mode MS-DOS Initialization Code for MANOS v1.0
+;   DATE     :  October 24, 1997
+;
+;
+;***************************************************************************
+
+.486P         ; select the processor
+MODEL LARGE   ; DOSSEG
+DOSHEAP = 1   ; specify whether DOS heap is to be used, or
+	      ; internal heap; 1 indicates DOS heap; 0 internal
+STACK 400h    ; reserve stack space as needed for application
+
+
+VERBOSE                 EQU       0
+CR 			EQU      13
+LF			EQU      10
+SYSTEM_PORTA		EQU	60h
+SYSTEM_STATUS_PORT	EQU	64h
+SYSTEM_CONTROL_PORTA 	EQU	92h
+;
+;  bus types
+;
+
+ISA     EQU     01h
+MCA     EQU     02h
+PS2     EQU     04h
+EISA    EQU     08h
+PCI     EQU     10h
+PCMCIA  EQU     20h
+
+OperSize	macro
+	db	66h
+	endm
+
+AddrSize	macro
+	db	67h
+	endm
+
+OPND32 macro op_code, op_erand
+	 db    66h
+   IFNB <op_code>
+	 db    op_code
+     IFNB <op_erand>
+	 dd    op_erand
+     ENDIF
+   ENDIF
+endm
+
+CPUID macro
+    db    0Fh
+    db    0A2h
+endm
+
+CR4_TO_ECX macro
+    db    0Fh
+    db    20h
+    db    0E1h
+endm
+
+ECX_TO_CR4 macro
+    db    0Fh
+    db    22h
+    db    0E1h
+endm
+
+Synch   macro
+	LOCAL L1, L2, L3
+
+	jmp	short L1
+L1:
+	jmp	short L2
+L2:
+	jmp	short L3
+L3:
+	endm
+
+
+PSPSignature          EQU    020CDh   ; signature of PSP
+
+ProgramSegmentPrefix  struc
+   PSPExitInt          dw     ?
+   PSPMemTotal         dw     ?
+   PSPResv1            db     ?
+   PSPDOSCall          db     5 dup (?)
+   PSPTerminate        dd     ?
+   PSPControlC         dd     ?
+   PSPCritical         dd     ?
+   PSPParent           dw     ?
+   PSPHandleTable      db     20 dup (?)
+   PSPEnvironment      dw     ?
+   PSPStack            dd     ?
+   PSPHandleSize       dw     ?
+   PSPHandlePtr        dd     ?
+   PSPResv2            db     24 dup (?)
+   PSPDOSInt           db     3 dup (?)
+   PSPResv3            db     9 dup (?)
+   PSPFCB1             db     16 dup (?)
+   PSPFCB2             db     16 dup (?)
+   PSPResv4            db     4 dup (?)
+   PSPCommandLen       db     1 dup (?)
+   PSPCommandBuf       db     127 dup (?)
+ProgramSegmentPrefix  ends
+
+IMAGE_BASE_RELOCATION struc
+    VirtualAddress    dd   ?
+    SizeOfBlock       dd   ?
+IMAGE_BASE_RELOCATION ends
+
+    ASSUME  cs:INITCODE, ds:INITCODE, es:nothing, fs:nothing, gs:nothing
+
+INITCODE SEGMENT PUBLIC READWRITE USE16
+
+public RealMode16Segment
+RealMode16Segment   label   dword
+
+;
+;  THIS IS THE BEGINNING OF EXECUTION
+;
+;  execution of this loader begins at this point.  The Borland assembler
+;  supports a STARTUPCODE directive that will automatically insert the
+;  proper PSP segment fixups relative to our EXE program.
+;
+
+   align 16
+public STARTUP_TAG1
+STARTUP_TAG1    db   'INIT'
+STARTUP_TAG2    db   '_COD'
+STARTUP_TAG3    db   'E_ST'
+STARTUP_TAG4    db   'ART_'
+;
+;  manos header.  DO NOT MOVE THIS HEADER OR TAG.  LLINK EXPECTS
+;  THE MANOS HEADER TO IMMEDIATELY FOLLOW THIS TAG.
+;
+
+public manos_header
+manos_header    label dword
+blocks_in_file         dw   0
+manos_res              dw   0
+startup_pe_header      dd   0
+startup_32_code        dd   0
+startup_32_data        dd   0
+startup_16_code        dd   0
+startup_stack          dd   0
+startup_reloc  	       dd   0
+startup_reloc_32       dd   0
+code_rva               dd   0
+data_rva               dd   0
+code_size              dd   0
+data_size              dd   0
+pe_base                dd   0
+startup_debug          dd   0
+code_virt_size         dd   0
+data_virt_size         dd   0
+reloc_size             dd   0
+debug_size             dd   0
+system_offset          dd   0
+psp_next_segment       dw   0
+total_paragraphs       dw   0
+
+InProt       db  'MANOS_FATAL: System is already in Protected Mode', CR, LF, '$'
+GoodDOSMsg   db  'MS-DOS Compatible Version 3.00 or Higher Detected', CR, LF, '$'
+BadDOSMsg    db  'MANOS_FATAL: MS-DOS Version Must be 3.00 or Higher for this Loader', CR, LF, '$'
+SMPDetect    db  'Multi-Processing Support Detected', CR, LF, '$'
+MPSVer       db  'Intel MPS (Multi-Processor Specification) Support Present', CR, LF, '$'
+
+XMSError     db  'MANOS_FATAL: XMS Detected.  Unload your XMS driver, then restart MANOS', CR, LF, '$'
+NoMem	     db  'MANOS_FATAL: Insufficient memory (need at least 8MB)', CR, LF, '$'
+NoLowMem     db  'MANOS_FATAL: Insufficient memory below 1MB', CR, LF, '$'
+MemFound     db  'Memory Subsystem Check Complete', CR, LF, '$'
+
+ISABus       db  'Industry Standard Architecture (ISA) Bus Detected', CR, LF, '$'
+MCABus       db  'Micro Channel Architecture (MCA) Bus Detected', CR, LF, '$'
+PS2Bus       db  'IBM PS/2 System Detected', CR, LF, '$'
+EISABus      db  'Extended Industry Standard Architecture (EISA) Bus Detected', CR, LF, '$'
+PCIBus       db  'Peripheral Component Interconnect (PCI) Bus Detected', CR, LF, '$'
+PCMCIABus    db  'PCMCIA Bus Detected', CR, LF, '$'
+
+Line20Msg    db  'Address Line 20 has been enabled', CR, LF, '$'
+Line20PS2    db  'Address Line 20 has been enabled (PS/2 mode)', CR, LF, '$'
+
+SearchMsg    db  'Performing Processor Verification', CR, LF, '$'
+GDTMsg       db  'Global Descriptor Tables Initialized', CR, LF, '$'
+DOSDrive     db  'Default MS-DOS Drive Information Found', CR, LF, '$'
+MouseOff     db  'Mouse Driver has been Reset and Disabled', CR, LF, '$'
+MouseOn      db  'Mouse Driver has been enabled', CR, LF, '$'
+
+resize_error    db  'MANOS_FATAL: Program Segment Prefix (PSP) Resize Failed', CR, LF, '$'
+unsup_proc      db  'MANOS_FATAL: Processor must be an 80386 equivalent or higher', CR, LF, '$'
+ProtModeOn      db  'Entered Protected Mode', CR, LF, '$'
+ProtModeOff     db  'Exited Protected Mode', CR, LF, '$'
+id_msg          db  'This system has a$'
+fp_8087         db  ' and an 8087 math coprocessor$'
+fp_80287        db  ' and an 80287 math coprocessor$'
+fp_80387        db  ' and an 80387 math coprocessor$'
+c8086           db  'n 8086/8088 processor$'
+c286            db  'n 80286 processor$'
+c386            db  'n 80386 processor$'
+c486            db  'n 80486 DX processor or 80487 SX math coprocessor$'
+c486nfp         db  'n 80486 SX processor$'
+Intel486_msg    db  'This System Contains a Genuine '
+		db  'Intel486(TM) processor', CR, LF, '$'
+Pentium_msg     db  'This System Contains a Genuine '
+		db  'Intel Pentium(R) processor', CR, LF, '$'
+PentiumPro_msg  db  'This System Contains a Genuine '
+		db  'Intel PentiumPro(R) processor', CR, LF, '$'
+model_msg       db  'Model:               $'
+stepping_msg    db  'Stepping:            $'
+family_msg      db  CR, LF, 'Processor Family:    $'
+period          db  '.', CR, LF, '$'
+dataCR          db  ?, CR, LF, '$'
+dataCR1         db  ?, CR, LF, '$'
+intel_id        db  'GenuineIntel'
+fpu_msg         db  CR, LF, 'This processor contains a FPU', CR, LF, '$'
+no_fpu_msg      db  CR, LF, 'This processor contains no FPU', CR, LF, '$'
+mce_msg         db  'This processor supports the '
+		db  'Machine Check Exception', CR, LF, '$'
+cmp_msg         db  'This processor supports the '
+		db  'CMPXCHG8B instruction', CR, LF, '$'
+page_4MB_msg    db  'This processor supports '
+		db  '4MB paging', CR, LF, '$'
+io_break_msg    db  'This processor supports '
+		db  'IO Breakpoints', CR, LF, '$'
+not_Intel       db  't least an 80486 processor.  '
+		db  'CPUID was not supported', CR, LF, '$'
+FourMeg         db  'Processor Supports 4MB Paging', CR, LF, '$'
+BadProcessor    db  'FATAL:  A 386 Processor or Higher was not Detected', CR, LF, '$'
+llinkmsg        db  'FATAL:  LLINK has not been run on this file', CR, LF, '$'
+
+io_break_enable db  'IO Breakpoint Support Enabled', CR, LF, '$'
+p4mb_enable     db  '4MB Paging Support Enabled', CR, LF, '$'
+wc_enable       db  'PCI Write Combining Enabled', CR, LF, '$'
+DOSExitMsg      db  'Exiting to MS-DOS', CR, LF, '$'
+FixupOKMsg      db  '32-bit image fixup completed', CR, LF, '$'
+FixupErrorMsg   db  '32-bit image fixup error', CR, LF, '$'
+
+CurrentDir      db  72 dup (0)
+
+FAMILY_MASK      EQU    0F00h
+FAMILY_SHIFT     EQU    8
+MODEL_MASK       EQU    0F0h
+MODEL_SHIFT      EQU    4
+STEPPING_MASK    EQU    0Fh
+FPU_FLAG         EQU    1h
+MCE_FLAG         EQU    80h
+CMPXCHG8B_FLAG   EQU    100h
+
+GDTDescriptor struc
+    Limit		dw	0FFFFh
+    Base1		dw	0
+    Base2		db	0
+    GDTType		db	10010010b
+    OtherType		db	11001111b
+    Base3		db	0
+GDTDescriptor ends
+
+PICA_8259               EQU  20h
+PICA_CONTROL            EQU  21h
+PICB_8259               EQU  0A0h
+PICB_CONTROL            EQU  0A1h
+
+   align 16
+DOS_TABLE              dd    0
+GDT_TABLE              dd    0
+GDT_POINTER            dd    0
+DOS_IDT_TABLE          dd    0
+DOS_CE_SEGMENT         dd    0
+DOS_CE_OFFSET          dd    0
+DOS_CC_SEGMENT         dd    0
+DOS_CC_OFFSET          dd    0
+DOS_DATA_SEGMENT       dd    0
+DOS_STACK_SEGMENT      dd    0
+DOS_EXTRA_SEGMENT      dd    0
+DOS_FS_SEGMENT         dd    0
+DOS_STACK_OFFSET       dd    0
+DOS_SYSTEM_BUS_TYPE    dd    0
+DOS_CR0                dd    0
+REAL_MODE_INT          dd    0
+DOS_EXIT               dd    0
+VENDOR_ID              db    12 dup (0)
+CPU_TYPE               db    0
+CPU_FILL               db    3 dup (0)
+CPU_MODEL              dd    0
+STEPPING               dd    0
+ID_FLAG                dd    0
+FEATURE_FLAGS          dd    0
+XMS_FUNCTION           dd    0
+XMS_MEMORY             dd    0
+XMS_SIZE               dd    0
+XMS_HANDLE             dd    0
+XMS_BASE               dd    0
+MEMORY_HIGH            dd    0
+MEMORY_HIGH_START      dd    0
+MEMORY_LOW             dd    0
+MEMORY_LOW_START       dd    0
+FP_STATUS              dd    0
+DOS_DEFAULT_DRIVE      dd    0
+MASK_8259_A            dd    0
+MASK_8259_B            dd    0
+FPU_TYPE               db    0
+FPU_FILL               db    3 dup (0)
+INTEL_PROC             db    0
+INTEL_FILL             db    3 dup (0)
+RESERVED               dd    0
+LINE_20_ON             dd    0
+LINE_20_OFF            dd    0
+PM_STACK               dd    0
+PM_CODE_SEGMENT        dd    0
+PM_DATA_SEGMENT        dd    0
+JUMP16_SEGMENT         dd    0
+MSDOS_CREATE           dd    0
+MSDOS_OPEN             dd    0
+MSDOS_LSEEK            dd    0
+MSDOS_READ             dd    0
+MSDOS_WRITE            dd    0
+MSDOS_CLOSE            dd    0
+MSDOS_UNLINK           dd    0
+PE_HEADER_ADDR         dd    0
+RELOC_OFFSET           dd    0
+RELOC32_OFFSET         dd    0
+CODE_RVA               dd    0
+DATA_RVA               dd    0
+CODE_SIZE              dd    0
+DATA_SIZE              dd    0
+VIDEO_ADDRESS          dd    0
+VIDEO_CURSOR_MODE      dd    0
+VIDEO_PORT_ADDRESS     dd    0
+VIDEO_SCREEN_TYPE      dd    0
+VIDEO_COLOR_FLAG       dd    0
+START_OF_CODE_16       dd    0
+END_OF_CODE_16         dd    0
+DEBUG_TABLE            dd    0
+CODE_VIRT_SIZE         dd    0
+DATA_VIRT_SIZE         dd    0
+EXTENDED_MEMORY_LEN    dd    0
+EXTENDED_MEMORY_ADDR   dd    0
+CODE_16_ENTRY          dd    0
+DEBUG_SIZE             dd    0
+STARTUP_SEGMENT        dd    0
+STARTUP_CODE           dd    0
+STARTUP_JUMP           dd    0
+RELOC_SIZE             dd    0
+SYSTEM_OFFSET          dd    0
+REAL_INT_SEGMENT       dd    0
+CURRENT_DIRECTORY      dd    0
+DISPLAY_CODE           dd    0
+DISPLAY_STATE          db    128 dup (0)
+
+; basic video display types
+
+MONOCHROME_SCN          EQU   00000001b
+CGA_SCN                 EQU   00000010b
+VGA_MONOCHROME_SCN      EQU   00000100b
+EGA_VGA_SCN             EQU   00001000b
+CURSOR_STD		EQU   0C0Bh
+CURSOR_HEAVY		EQU   0C09h
+CURSOR_BLK		EQU   0C00h
+CURSOR_UP		EQU   0400h
+
+   align 16
+public MSDOSIDTTable
+MSDOSIDTTable    label pword
+   MSDOSIDTIndex	 dw  0
+   MSDOSIDTOffset	 dd  0
+
+   align 16
+public MSDOSGDTTable
+MSDOSGDTTable    label pword
+   MSDOSGDTIndex	 dw  0
+   MSDOSGDTOffset	 dd  0
+
+   align 16
+public NullGDT
+NullGDT	        GDTDescriptor	<>                      ; 00h
+CodeSegment	GDTDescriptor	<,,,9Ah>        ; 08h
+DataSegment	GDTDescriptor	<>              ; 10h
+RealModeCode    GDTDescriptor	<,,,9Ah,0>      ; 18h
+RealModeData	GDTDescriptor	<,,,,0>         ; 20h
+
+   align 16
+public GDTTable
+GDTTable     label pword
+GDTIndex     dw  40
+GDTOffset    dd	 0
+
+
+   align 16
+public init_code
+init_code proc near
+
+   STARTUPCODE
+
+   ; MS-DOS EXE programs have all available memory allocated to them
+   ; so we have to read the PSP, and free paragraphs we are not using
+   ; the borland startup code will set ds: to an incorrect value
+   ; but we assume ds: = cs:
+
+IF DOSHEAP
+
+   ; Release all memory except the amount currently being used
+   ; End of stack is end of non-heap portion of program
+   ; es: = PSP memory block, ds:= code segment
+
+   ;
+   ; until we detect what processor we are running on, some
+   ; things to be careful with:
+   ; 1.  all jumps must be short jmp instructions
+   ; 2.  we cannot use any opcodes that reference 386 registers
+   ;
+
+   mov    ax, cs
+   mov    ds, ax
+
+   mov    ax, blocks_in_file     ; convert 512 blocks in paragraphs
+   or     ax, ax                 ; if llink was not run, then
+   jz     short no_psp_fixup     ; don't do the fixup
+
+   mov    ax, blocks_in_file     ; convert 512 blocks in paragraphs
+   add    ax, 32                 ; add 16K stack for startup
+   mov    dx, 32                 ; multiply by 32 to get number of paragraphs
+   mul    dx
+   mov    bx, ax
+   mov    total_paragraphs, bx   ; save total size of image (paragraphs)
+
+   mov    ah, 4Ah   ;resize memory block with PSP
+   int    21h       ;address in ES
+   jc     short ResizeError
+
+   mov    ax, es                 ; ES PSP address
+   add    ax, total_paragraphs   ; add to our total size
+   add    ax, 15                 ; round up
+   and    ax, 0FFF0h             ; align on paragraph boundry
+   mov    es:PSPMemTotal, ax     ; adjust PSP end of memory
+   mov    ds:psp_next_segment, ax
+
+   jmp    short init_continue
+
+no_psp_fixup:
+
+   mov    dx, offset llinkmsg
+   call   OutputMessage
+
+   mov    ah, 4Ch
+   xor    al, al
+   int    21h
+
+ENDIF
+
+init_continue:
+   ;
+   ;  if the PE bit in CR0 is already set, them exit with
+   ;  error.  The machine is already in protected mode
+   ;
+
+   xor    ax, ax
+   smsw	  ax
+   test	  ax, 01h
+   jz	  short CheckHardware
+
+   mov    dx, offset InProt
+   call   OutputMessage
+
+   mov    ah, 4Ch
+   xor    al, al
+   int    21h
+
+CheckHardware:
+   call   DetectProcessorInformation
+   mov    al, CPU_TYPE
+   cmp    al, 3
+   jl     short ProcessorNotSupported
+
+   call   DetectDOSVersion
+
+   call   GetVideoInfo
+
+   call   DetectBusInformation
+
+   call   PEFixup    ; fixup PE image attached to INIT.EXE
+
+   call   DetectXMS  ; if XMS is not present, then query int 15
+   or     eax, eax
+   jnz    ExecSystem
+
+   call   DetectExtendedMemory
+
+ExecSystem:
+
+   call   EnterProtectedMode
+
+   ; Exit to DOS when complete or if error
+
+   mov    ah, 4Ch
+   xor    al, al
+   int    21h
+
+ProcessorNotSupported:
+
+   mov    dx, offset unsup_proc
+   call   OutputMessage
+
+   mov    ah, 4Ch
+   xor    al, al
+   int    21h
+
+ResizeError:
+
+   mov    dx, offset resize_error
+   call   OutputMessage
+
+   mov    ah, 4Ch
+   xor    al, al
+   int    21h
+
+init_code endp
+
+
+;*************************************************************************
+;
+;  Enter Protected Mode
+;
+;*************************************************************************
+
+public EnterProtectedMode
+EnterProtectedMode proc near
+
+	cli
+
+	mov     ax, cs
+	mov     ds, ax
+
+	;
+	;  point of no return.  Here we will go to protected mode
+	;  at this point, it is assumed we have performed all the
+	;  necessary checks, and have passed this system as
+	;  capable of suppporting a protected mode operating
+	;  system.
+	;
+
+	;
+	;  MSDOS documentation states that the control-c and critical
+	;  error handlers are vectored to the PSP by MSDOS, requiring
+	;  that the IVT (interrupt vector table) be patched to hook
+	;  these vectors.  If someone presses control-c or we get a
+	;  critical error, then the system will hang if these vectors
+	;  are not stubbed during load.
+	;
+
+	call    HookDOSHandlers
+
+	cmp     dword ptr ds: XMS_FUNCTION, 0
+	jnz     Line20XMSEnable
+
+	call    BitLine20
+
+Line20XMSEnable:
+	call    DisableMouse
+
+	call    GetDOSDefaultDrive
+
+	call    GetDefaultDirectory
+
+	;  read the current 8259 mask values for PICA and PICB
+
+	OperSize
+	sgdt    ds:MSDOSGDTTable
+
+	OperSize
+	sidt    ds:MSDOSIDTTable
+
+	in      al, 21h
+	mov     byte ptr ds:MASK_8259_A, al
+	Synch
+
+	;  Move the default vector number for PIC0 to 28h
+	;
+	; ICW1 - 11h-> ICW1, LTIM=ignored, ADI=ignored, SNGL=cascade, ICW4 needed
+
+	mov     eax, DOS_SYSTEM_BUS_TYPE
+	and     eax, PS2
+	jz      NotLevelPIC
+
+	mov     al, 19h   ; set to level triggered
+	out     20h, al
+	Synch
+
+	jmp     ICW2Next
+
+NotLevelPIC:
+	mov     al, 11h   ; set to edge triggered
+	out     20h, al
+	Synch
+
+ICW2Next:
+
+	mov     al, 28h    ; MANOS Vector 28h
+	out     21h, al
+	Synch
+
+	; MSDOS is Vector 8h
+	; ICW3 - 0000 0100 INT2 is cascaded
+
+	mov     al, 4h
+	out     21h, al
+	Synch
+
+	; ICW4 - 0000 0001: 8086/8088 mode
+
+	mov     al, 1h
+	out     21h, al
+	Synch
+
+
+	mov     al, 0FFh   ; (11111111b)
+	out     21h, al
+	Synch
+
+	in      al, 0A1h
+	mov     byte ptr ds:MASK_8259_B, al
+	Synch
+
+	mov     al, 0FFh
+	out     0A1h, al
+	Synch
+
+	mov     al, 0Ah    ;  IRR reads ISR
+	out     20h, al
+	out     0A0h, al
+	Synch
+
+	;  calculate 32 bit linear address
+	;  (cs << 4) + offset <entry32>
+	;  here we patch the GDT to create a far 16-bit
+	;  segment to return to real mode.
+
+	xor    eax, eax
+	mov    ax, cs
+	shl    eax, 4
+	add    eax, offset ds: RealMode16Segment
+
+	mov    dword ptr ds:JUMP16_SEGMENT, eax
+
+	mov    bx, offset ds: RealModeCode
+	mov    ds: [bx].Base1, ax
+	shr    eax, 16
+	mov    ds: [bx].Base2, al
+	mov    ds: [bx].Base3, ah
+
+	xor    eax, eax
+	mov    ax, cs
+	shl    eax, 4
+	add    eax, offset ds: RealMode16Segment
+
+	mov    bx, offset ds: RealModeData
+	mov    ds: [bx].Base1, ax
+	shr    eax, 16
+	mov    ds: [bx].Base2, al
+	mov    ds: [bx].Base3, ah
+
+	mov     eax, offset ds: jump_16
+	sub     eax, offset ds: RealMode16Segment
+	mov     dword ptr ds: RealOffsetValue, eax
+
+	xor	eax, eax
+	mov	ax, cs
+	shl	eax, 4
+	add	eax, offset ds: MSDOSIDTTable
+	mov     dword ptr ds: DOS_IDT_TABLE, eax
+
+	xor	eax, eax
+	mov	ax, cs
+	shl	eax, 4
+	add	eax, offset ds: GDTTable
+	mov     dword ptr ds: GDT_POINTER, eax
+
+	xor	eax, eax
+	mov	ax, cs
+	shl	eax, 4
+	add	eax, offset ds: CurrentDir
+	mov     dword ptr ds: CURRENT_DIRECTORY, eax
+
+	xor	eax, eax
+	mov	ax, cs
+	shl	eax, 4
+	add	eax, offset ds: NullGDT
+	mov	dword ptr ds: GDTOffset, eax
+
+	xor	eax, eax
+	mov	ax, cs
+	shl	eax, 4
+	add	eax, offset ds: MSDOSGDTTable
+	mov     dword ptr ds: GDT_TABLE, eax
+
+	xor	eax, eax
+	mov	ax, cs
+	shl	eax, 4
+	add	eax, offset ds: PSNull
+	mov	dword ptr ds: PSGDTOffset, eax
+
+	xor	eax, eax
+	mov	ax, cs
+	shl	eax, 4
+	add	eax, offset ds: PSSegment
+	mov	dword ptr ds: STARTUP_SEGMENT, eax
+
+	xor	eax, eax
+	mov	ax, cs
+	shl	eax, 4
+	add	eax, offset ds: PSStart
+	mov	dword ptr ds: STARTUP_CODE, eax
+
+	xor	eax, eax
+	mov	ax, cs
+	shl	eax, 4
+	add	eax, offset ds: PSGDTOffsetValue
+	mov	dword ptr ds: STARTUP_JUMP, eax
+
+	xor     eax, eax
+	mov     ax, cs
+	shl     eax, 4
+	add     eax, offset cs: BitLine20
+	mov     dword ptr ds: LINE_20_ON, eax
+
+	xor     eax, eax
+	mov     ax, cs
+	shl     eax, 4
+	add     eax, offset cs: DisableLine20
+	mov     dword ptr ds: LINE_20_OFF, eax
+
+	xor     eax, eax
+	mov     ax, cs
+	shl     eax, 4
+	add     eax, offset cs: RealMode16Segment
+	mov     dword ptr ds: START_OF_CODE_16, eax
+
+	xor     eax, eax
+	mov     ax, cs
+	shl     eax, 4
+	add     eax, offset cs: init_code
+	mov     dword ptr ds: CODE_16_ENTRY, eax
+
+	xor     eax, eax
+	mov     ax, cs
+	shl     eax, 4
+	add     eax, offset cs: RealMode16SegmentEnd
+	mov     dword ptr ds: END_OF_CODE_16, eax
+
+	xor     eax, eax
+	xor     ecx, ecx
+	mov     ax, cs
+	shl     eax, 4
+	mov     ecx, dword ptr ds: startup_pe_header
+	add     eax, ecx
+	mov     dword ptr ds: PE_HEADER_ADDR, eax
+
+	xor     eax, eax
+	xor     ecx, ecx
+	mov     ax, cs
+	shl     eax, 4
+	mov     ecx, dword ptr ds: startup_reloc
+	add     eax, ecx
+	mov     dword ptr ds: RELOC_OFFSET, eax
+
+	xor     eax, eax
+	xor     ecx, ecx
+	mov     ax, cs
+	shl     eax, 4
+	mov     ecx, dword ptr ds: startup_reloc_32
+	add     eax, ecx
+	mov     dword ptr ds: RELOC32_OFFSET, eax
+
+	xor     eax, eax
+	xor     ecx, ecx
+	mov     ax, cs
+	shl     eax, 4
+	mov     ecx, dword ptr ds: startup_debug
+	add     eax, ecx
+	mov     dword ptr ds: DEBUG_TABLE, eax
+
+	xor     eax, eax
+	mov     eax, dword ptr ds: code_rva
+	mov     dword ptr ds: CODE_RVA, eax
+
+	xor     eax, eax
+	mov     eax, dword ptr ds: data_rva
+	mov     dword ptr ds: DATA_RVA, eax
+
+	xor     eax, eax
+	mov     eax, dword ptr ds: code_size
+	mov     dword ptr ds: CODE_SIZE, eax
+
+	xor     eax, eax
+	mov     eax, dword ptr ds: data_size
+	mov     dword ptr ds: DATA_SIZE, eax
+
+	xor     eax, eax
+	mov     eax, dword ptr ds: code_virt_size
+	mov     dword ptr ds: CODE_VIRT_SIZE, eax
+
+	xor     eax, eax
+	mov     eax, dword ptr ds: data_virt_size
+	mov     dword ptr ds: DATA_VIRT_SIZE, eax
+
+	xor     eax, eax
+	mov     eax, dword ptr ds: debug_size
+	mov     dword ptr ds: DEBUG_SIZE, eax
+
+	xor     eax, eax
+	mov     eax, dword ptr ds: system_offset
+	mov     dword ptr ds: SYSTEM_OFFSET, eax
+
+	xor     eax, eax
+	mov     eax, dword ptr ds: reloc_size
+	mov     dword ptr ds: RELOC_SIZE, eax
+
+	xor     eax, eax
+	mov     ax, cs
+	shl     eax, 4
+	add     eax, offset cs: MSDOSExit
+	mov     dword ptr ds: DOS_EXIT, eax
+
+	xor     eax, eax
+	xor     ecx, ecx
+	mov     ax, cs
+	shl     eax, 4
+	mov     ecx, dword ptr ds: startup_32_code   ; COMBINE provided fixup
+	add     eax, ecx
+	mov     dword ptr ds: GDTOffsetValue, eax  ; startup jump address
+	mov     dword ptr ds: PM_CODE_SEGMENT, eax
+
+	xor     eax, eax
+	mov     ax, cs
+	shl     eax, 4
+	mov     ecx, dword ptr ds: startup_32_data  ; COMBINE provided fixup
+	add     eax, ecx
+	mov     dword ptr ds: PM_DATA_SEGMENT, eax
+
+	xor     eax, eax
+	movzx   eax, word ptr ds:psp_next_segment
+	shl     eax, 4
+	sub     eax, 32
+	mov     dword ptr ds: PM_STACK, eax
+
+	pushf   ; save real mode flags
+
+	mov     ax, ss
+	mov     word ptr ds: DOS_STACK_SEGMENT, ax
+	mov     ax, sp
+	mov     word ptr ds: DOS_STACK_OFFSET, ax
+	mov     ax, ds
+	mov     word ptr ds: DOS_DATA_SEGMENT, ax
+	mov     ax, es
+	mov     word ptr ds: DOS_EXTRA_SEGMENT, ax
+	mov     ax, fs
+	mov     word ptr ds: DOS_FS_SEGMENT, ax
+
+	; put the ds: segment value into the edx register
+
+	xor     edx, edx
+	mov     dx, ds
+
+	;  pass the base address of the MSDOS Data Table in ebx
+
+	xor     eax, eax
+	mov     ax, cs
+	shl     eax, 4
+	add     eax, offset ds: DOS_TABLE
+	mov     dword ptr ds: DOS_TABLE, eax
+	mov     ebx, eax
+
+	;
+	;  at this point, DS: is in the edx register
+	;  and the MSDOS data table is in the ebx
+	;  register.
+	;
+
+	xor    ecx, ecx  ; tell startup caller is real mode loader
+
+	;
+	;  enable protected mode
+	;
+	mov    eax, CR0
+	mov    dword ptr ds: DOS_CR0, eax
+
+	OperSize
+	lgdt   ds: GDTTable
+
+	mov    eax, CR0
+	and    eax, 0FFFFFFF1h        ;  clear TS/EM/MP
+	cmp    ds: FPU_TYPE, 0
+	jnz    FloatingPointUnitPresent
+
+	or     eax, 4		; set Math Emulation bit (EM)
+	jmp    NoFloatingPointUnit
+
+FloatingPointUnitPresent:
+	or     eax, 2		; set the Math Present bit (MP)
+
+NoFloatingPointUnit:
+	or     eax, 1
+	mov    CR0, eax
+	jmp    short ClearPreFetch     ; jump is required to clear
+				 ; the the processor pre-fetch
+
+ClearPreFetch:
+	AddrSize
+	OperSize
+	mov	eax, 10h         ; assume cs:segment 08h, all
+	mov	ds, ax           ; other segment registers assume
+	mov	es, ax           ; ds:segment 10h
+	mov	ss, ax
+	mov	fs, ax
+
+	AddrSize
+	OperSize
+	db   0EAh                ; jmp far 0008:00000000 start of 32 bit code
+
+	GDTOffsetValue	label	dword
+	dd   0
+	dw   8h
+
+EnterProtectedMode endp
+
+;
+;  Symmetrical Muliprocessing entry point for processors 1-31
+;
+
+   align 16
+public PSNull
+PSNull        GDTDescriptor  <>		;00
+PSCodeGDT     GDTDescriptor  <,,,9Ah>  	;08
+PSDataGDT     GDTDescriptor  <>	  	;10
+
+   align 16
+   public PSSegment
+PSSegment            label	dword
+PSGDTPointerTable    label	pword
+PSGDTPointer	dw  18h
+PSGDTOffset	dd  0
+
+public PSStart
+PSStart:
+	cli
+	mov	ax, cs
+	mov	ds, ax
+	xor     ebx, ebx
+
+	lgdt	ds: [ebx]
+
+	mov	eax, CR0
+	or	eax, 1
+	mov	CR0, eax
+
+	jmp	short PrefetchClear
+
+PrefetchClear:
+	AddrSize
+	OperSize
+	mov     eax, 10h
+	mov	ds, ax
+	mov	es, ax
+	mov	fs, ax
+	mov	gs, ax
+	mov	ss, ax
+
+	AddrSize
+	OperSize
+	db	0EAh
+
+	PSGDTOffsetValue   label   dword
+	dd	0
+	dw	8h
+
+
+;*************************************************************************
+;
+;  Exit to MSDOS
+;
+;*************************************************************************
+
+   align 16
+public MSDOSExit
+MSDOSExit proc
+	cli
+	mov	ss, ax
+	mov	ds, ax
+	mov	es, ax
+	mov	fs, ax
+
+	db	0EAh    ; jmp far
+
+	RealOffsetValue	label	dword
+	dd	0
+	dw	18h
+
+jump_16:
+	mov	eax, CR0
+	and	al, not 1
+	mov	CR0, eax
+
+jump_to_real_mode:
+	db	0EAh    ; jmp far
+	dd	real_mode_jump
+
+real_mode_jump:
+	mov     ds, dx
+	mov     ax, word ptr ds: DOS_STACK_SEGMENT
+	mov	ss, ax
+	mov     ax, word ptr ds: DOS_EXTRA_SEGMENT
+	mov     es, ax
+	mov     ax, word ptr ds: DOS_FS_SEGMENT
+	mov     fs, ax
+	mov     ax, word ptr ds: DOS_STACK_OFFSET
+	mov     sp, ax
+
+	popf    ; restore real mode flags
+
+
+	mov     ax, word ptr ds:FEATURE_FLAGS
+	test    ax, 4
+	jz      disable_size_extension
+
+	;	disable Debugging Extensions bit in CR4
+	CR4_TO_ECX
+	and     ecx, not 08h
+	ECX_TO_CR4
+
+
+disable_size_extension:
+	mov     ax, word ptr ds:FEATURE_FLAGS
+	test    ax, 08h
+	jz      disable_address_extension
+
+	;   disable page size extension bit in CR4
+	CR4_TO_ECX
+	and	ecx, not 10h
+	ECX_TO_CR4
+
+
+disable_address_extension:
+	mov     ax, word ptr ds:FEATURE_FLAGS
+	test    ax, 40h
+	jz      restore_dos_idt
+
+	;   disable page address extension bit in CR4
+	CR4_TO_ECX
+	and	ecx, not 20h
+	ECX_TO_CR4
+
+restore_dos_idt:
+	;
+	;  unhook the control-c and critical error handlers
+	;
+
+	call    UnhookDOSHandlers
+
+	; restore the PIC state to default MSDOS settings
+	;
+	;  Move the default vector number for PIC0 to 8h
+	;
+	; ICW1 - 11h-> ICW1, LTIM=ignored, ADI=ignored, SNGL=cascade, ICW4 needed
+
+	mov     eax, DOS_SYSTEM_BUS_TYPE
+	and     eax, PS2
+	jz      NotLevelPICExit
+
+	mov     al, 19h   ; set to level triggered
+	out     20h, al
+	Synch
+
+	jmp     ICW2Exit
+
+NotLevelPICExit:
+	mov     al, 11h   ; set to edge triggered
+	out     20h, al
+	Synch
+
+ICW2Exit:
+	; ICW2 - Vector T7-T3: 0010 1xxx
+
+	mov     al, 8h    ; MSDOS Vector 08h
+	out     21h, al
+	Synch
+
+	; MSDOS is Vector 8h
+	; ICW3 - 0000 0100 INT2 is cascaded
+
+	mov     al, 4h
+	out     21h, al
+	Synch
+
+	; ICW4 - 0000 0001: 8086/8088 mode
+
+	mov     al, 1h
+	out     21h, al
+	Synch
+
+
+	OperSize
+	lgdt    ds:MSDOSGDTTable
+
+	OperSize
+	lidt    ds:MSDOSIDTTable
+
+	mov     eax, DOS_CR0
+	mov     CR0, eax
+
+	cmp     dword ptr ds: XMS_FUNCTION, 0
+	jnz     Line20XMSDisable
+
+	call    DisableLine20
+
+	call    EnableMouse
+
+	mov     al, byte ptr ds:MASK_8259_A
+	out     21h, al
+	Synch
+
+	mov     al, byte ptr ds:MASK_8259_B
+	out     0A1h, al
+	Synch
+
+if (VERBOSE)
+	mov     dx, offset DOSExitMsg
+	call    OutputMessage
+endif
+
+	; goto_xy 0,0
+	mov     ah, 2
+	mov     bh, 0
+	mov     dh, 0
+	mov     dl, 0
+	int     10h
+
+	;  clear the screen
+	mov     ah, 6
+	mov     al, 0
+	mov     ch, 0
+	mov     cl, 0
+	mov     dh, 24
+	mov     dl, 79
+	mov     bh, 7
+	int     10h
+
+	mov     ax, 3
+	int     10h
+
+	mov     ah, 4Ch
+	xor     al, al
+	int     21h
+
+Line20XMSDisable:
+	call    xms_local_disable_a20
+
+	push    word ptr ds: XMS_HANDLE
+	call    xms_unlock_emb
+	add     sp, 2
+
+	push    word ptr ds: XMS_HANDLE
+	call    xms_emb_free
+	add     sp, 2
+
+	call    EnableMouse
+
+	mov     al, byte ptr ds:MASK_8259_A
+	out     21h, al
+	Synch
+
+	mov     al, byte ptr ds:MASK_8259_B
+	out     0A1h, al
+	Synch
+
+if (VERBOSE)
+	mov     dx, offset DOSExitMsg
+	call    OutputMessage
+endif
+
+	; goto_xy 0,0
+	mov     ah, 2
+	mov     bh, 0
+	mov     dh, 0
+	mov     dl, 0
+	int     10h
+
+	;  clear the screen
+	mov     ah, 6
+	mov     al, 0
+	mov     ch, 0
+	mov     cl, 0
+	mov     dh, 24
+	mov     dl, 79
+	mov     bh, 7
+	int     10h
+
+	mov     ax, 3
+	int     10h
+
+	mov     ah, 4Ch
+	xor     al, al
+	int     21h
+
+
+MSDOSExit endp
+
+
+; LONG xms_installed(void);
+
+public	xms_installed
+xms_installed	proc  near
+
+	mov	ax, 04300h
+	int	02fh
+	cmp	al, 080h
+	je	present
+	xor	eax, eax
+	ret
+
+present:
+	mov	ax, 04310h
+	int	02fh
+	mov	word ptr ds: XMS_FUNCTION, bx
+	mov	word ptr ds: XMS_FUNCTION+2, es
+	mov	eax, 1
+	ret
+
+xms_installed	endp
+
+; LONG xms_query_extended_memory(void) - return largest free block
+;
+public	xms_query_extended_memory
+xms_query_extended_memory	proc   near
+
+	mov	ah, 88H
+	call	cs: XMS_FUNCTION
+	or	bl, bl
+	jne	short fail_new_call
+
+	mov	edx, eax
+	shr	edx, 16
+	ret
+
+fail_new_call:
+	mov	ah,08H
+	call	cs: XMS_FUNCTION
+	xor	dx, dx
+	ret
+
+xms_query_extended_memory	endp
+
+; LONG xms_local_enable_a20(void)
+
+public	xms_local_enable_a20
+xms_local_enable_a20	proc    near
+	mov	ah,05H
+	jmp	short no_arg_common
+
+xms_local_enable_a20	endp
+
+; int xms_local_disable_a20(void)
+
+public	xms_local_disable_a20
+xms_local_disable_a20	proc     near
+	mov	ah,06H
+	jmp	short no_arg_common
+
+xms_local_disable_a20	endp
+
+; int xms_emb_free(short handle);
+
+public	xms_emb_free
+xms_emb_free	proc        near
+	mov	ah,00aH
+handle_common:
+	push	bp
+	mov	bp,sp
+	mov	dx, [bp+4]
+	pop	bp
+no_arg_common:
+	call	cs: XMS_FUNCTION
+	ret
+xms_emb_free	endp
+
+; LONG xms_unlock_emb(short handle);
+
+public	xms_unlock_emb
+xms_unlock_emb	proc    near
+	mov	ah,00dH
+	jmp	short handle_common
+xms_unlock_emb	endp
+
+; LONG xms_lock_emb(short handle);
+
+public	xms_lock_emb
+xms_lock_emb	proc     near
+	push	bp
+	mov	bp,sp
+	mov	ah,00cH
+	mov	dx,[bp+4]
+	pop	bp
+	call	cs: XMS_FUNCTION
+	or	ax,ax
+	jz	lock_failed
+
+	mov	ax, dx      ; get 32-bit start address of memory
+	shl	eax, 16     ; high word in dx, low word in bx
+	mov	ax, bx      ; eax = dx:bx
+
+	ret
+
+lock_failed:
+	xor     eax, eax   ; zero if lock failed
+	ret
+xms_lock_emb	endp
+
+; int xms_emb_allocate(ulong size);
+
+public	xms_emb_allocate
+xms_emb_allocate	proc    near
+	push	bp
+	mov	bp, sp
+	mov	edx, [bp+4]
+	pop	bp
+	mov	eax, edx
+	shr	eax, 16
+	je	old_call
+
+	mov	ah,80h
+
+old_call:
+	add	ah, 09h
+	call	cs: XMS_FUNCTION
+	or	ax, ax
+	je	alloc_failed
+	xchg	ax, dx
+	ret
+
+alloc_failed:
+	mov     ax, -1
+	ret
+
+xms_emb_allocate	endp
+
+
+;*************************************************************************
+;
+;  Detect and Configure Video System
+;
+;*************************************************************************
+
+public GetVideoInfo
+GetVideoInfo proc near
+	mov    ax, cs
+	mov    ds, ax
+
+GetVideoPortAddress:
+	xor    ax, ax     ; BIOS Data Area Segment Pointer
+	mov    es, ax
+	mov    ax, word ptr es:463h   ; 40:63h is Video Base Address
+				     ; for 6845 Controller
+	mov    word ptr ds: VIDEO_PORT_ADDRESS, ax
+
+	mov    ax, 0F00h      ; get video mode
+	int    10h
+
+	and    ax, 0FFh
+	cmp    ax, 7
+	jne    CheckForColorVideo
+
+	; monochrome screen
+
+	mov    ds: VIDEO_ADDRESS, 000B0000h
+	mov    ds: VIDEO_COLOR_FLAG, 0
+	mov    ds: VIDEO_SCREEN_TYPE, MONOCHROME_SCN
+	jmp    ConfigureCursor
+
+
+CheckForColorVideo:
+	mov    ax, 1200h      ;
+	mov    bx, 0FF10h     ; test for EGA
+	int    10h
+
+	and    bx, 0FF00h
+	cmp    bx, 0FF00h
+	jne    FoundEGA_VGA
+
+	; CGA has seven scan lines for the cursor, monochrome VGA
+	; does not match
+
+	push   es
+	xor    ax, ax
+	mov    es, ax
+
+	mov    bx, word ptr es:74h
+	mov    ax, word ptr es:76h
+	mov    es, ax
+	add    bx, 25
+	mov    ax, word ptr es:[bx]    ; get cursor scan lines
+	pop    es
+
+	cmp    ax, 7
+	jne    CheckVGAMonochrome
+
+	; CGA Monitor
+
+	mov    ds: VIDEO_ADDRESS, 000B8000h
+	mov    ds: VIDEO_COLOR_FLAG, 1
+	mov    ds: VIDEO_SCREEN_TYPE, CGA_SCN
+	jmp    ConfigureCursor
+
+CheckVGAMonochrome:
+
+	; monochrome VGA monitor
+
+	mov    ds: VIDEO_ADDRESS, 000B8000h
+	mov    ds: VIDEO_COLOR_FLAG, 0
+	mov    ds: VIDEO_SCREEN_TYPE, VGA_MONOCHROME_SCN
+	jmp    ConfigureCursor
+
+
+FoundEGA_VGA:
+	mov    ax, 3    ; set to Mode 3 80x25 Color Text Mode
+	int    10h
+
+	; monochrome screen
+
+	mov    ds: VIDEO_ADDRESS, 000B8000h
+	mov    ds: VIDEO_COLOR_FLAG, 1
+	mov    ds: VIDEO_SCREEN_TYPE, EGA_VGA_SCN
+
+
+ConfigureCursor:
+	test   ds: VIDEO_SCREEN_TYPE, CGA_SCN
+	jz     NotACGAMonitor
+
+	xor    eax, eax
+	xor    ebx, ebx
+	xor    ecx, ecx
+	xor    edx, edx
+	mov    ebx, 0F0000h
+
+	mov    edx, CURSOR_STD
+	and    edx, 0FFh
+	mov    eax, edx
+	mov    edx, 7
+	mul    edx
+	mov    edx, 15
+	div    edx
+
+	add    ebx, eax    ; add to total
+
+	mov    edx, CURSOR_STD
+	and    edx, 0FF00h
+	mov    eax, edx
+	mov    edx, 7
+	mul    edx
+	mov    edx, 15
+	div    edx
+
+	add    ebx, eax    ; add to total
+	mov    ds: VIDEO_CURSOR_MODE, ebx
+	jmp    GetVideoExit
+
+
+NotACGAMonitor:
+	xor    eax, eax
+	xor    ecx, ecx
+	mov    eax, 0F0000h
+	mov    ecx, CURSOR_STD
+	add    eax, ecx
+	mov    ds: VIDEO_CURSOR_MODE, eax
+
+GetVideoExit:
+
+	;
+	;   get active display code from BIOS, if supported
+	;
+
+	mov    ds:DISPLAY_CODE, 0
+
+	mov    ah, 01Ah
+	mov    al, 0
+	int    10h
+
+	cmp    al, 01Ah
+	jne    short getDisplayUnsup
+
+	;
+	;   get display combination not supported by this BIOS
+	;
+
+	xor    eax, eax
+	mov    al, bl      ;  get active display code
+	mov    ds:DISPLAY_CODE, eax
+
+getDisplayUnsup:
+
+	;
+	;   get display functionality/state information
+	;
+
+	mov    ah, 01Bh
+	mov    bx, 0
+	mov    ax, cs
+	mov    es, ax
+	mov    di, offset ds:DISPLAY_STATE
+
+	int    10h
+
+	cmp    al, 01Bh
+	je     GetFuncSup
+
+	mov    byte ptr ds:DISPLAY_STATE, 0FFh
+	mov    byte ptr ds:DISPLAY_STATE + 1, 0FFh
+	mov    byte ptr ds:DISPLAY_STATE + 2, 0FFh
+	mov    byte ptr ds:DISPLAY_STATE + 3, 0FFh
+
+GetFuncSup:
+
+	ret
+
+GetVideoInfo endp
+
+
+;*************************************************************************
+;
+;  Detect XMS - Detect XMS, and allocate all XMS system memory
+;
+;*************************************************************************
+
+public DetectXMS
+DetectXMS proc near
+
+	mov    ax, cs  ; ds: = cs:
+	mov    ds, ax
+
+	mov    MEMORY_HIGH, 0
+	mov    MEMORY_HIGH_START, 0
+	mov    MEMORY_LOW, 0
+	mov    MEMORY_LOW_START, 0
+
+	;  check for XMS memory manager
+
+	call   xms_installed
+	or     ax, ax
+	jz     ErrorDetectXMS
+
+	call   xms_query_extended_memory
+	or     ax, ax
+	jz     ErrorDetectXMS
+
+	mov    dword ptr ds: XMS_SIZE, eax
+
+	push   dword ptr ds: XMS_SIZE
+	call   xms_emb_allocate
+	add    sp, 4
+	mov    word ptr ds: XMS_HANDLE, ax
+
+	push   word ptr ds: XMS_HANDLE
+	call   xms_lock_emb
+	add    sp, 2
+	mov    dword ptr ds: XMS_MEMORY, eax
+	mov    dword ptr ds: XMS_BASE, eax
+
+	call   xms_local_enable_a20
+
+	mov    edx, dword ptr ds: XMS_SIZE
+	shl    edx, 10    ; convert 1K blocks to bytes
+	mov    MEMORY_HIGH, edx
+	mov    eax, dword ptr ds: XMS_BASE
+	mov    MEMORY_HIGH_START, eax
+
+	xor    eax, eax
+	mov    ax, psp_next_segment  ; get end of our program
+	shl    eax, 4                ; convert to 32 bit linear address
+				      ; PSPs are assumed as zero relative
+				      ; no offset to add
+
+	mov    MEMORY_LOW_START, eax
+	xor    eax, eax
+	mov    ax, 0A000h           ; DOS end of memory
+	mov    bx, psp_next_segment
+	sub    ax, bx               ; get the size in paragraphs
+	mov    edx, 16              ;
+	mul    edx                  ; multiply by 16 to get the size
+	mov    MEMORY_LOW, eax      ; size of low memory
+
+	mov    eax, MEMORY_HIGH
+	ret
+
+ErrorDetectXMS:
+	xor    eax, eax
+	ret
+
+DetectXMS endp
+
+;*************************************************************************
+;
+;  DetectExtended Memory - Query Int 15 for Extended Memory Size
+;
+;*************************************************************************
+
+public DetectExtendedMemory
+DetectExtendedMemory proc near
+
+	mov    MEMORY_HIGH, 0
+	mov    MEMORY_HIGH_START, 0
+	mov    MEMORY_LOW, 0
+	mov    MEMORY_LOW_START, 0
+
+	mov   ax, 0E801h      ; this is the newer call
+	int   15h	      ; int 15, function E8 Get Extended Memory
+	jc    BIOSFunction88  ; if error, then try BIOS int15 88
+
+	; ax = 1MB-16MB in 1KB increments
+	; bx = above 16MB in 64KB increments
+	; cx = 1MB-16MB in 1KB increments
+	; dx = above 16MB in 64KB increments
+	; cf = 0=success, 1=error
+
+	movzx  edx, bx         ;
+	shl    edx, 16	       ;  convert 64K blocks to bytes
+	movzx  ebx, ax         ;
+	shl    ebx, 10         ;  convert 1K blocks to bytes
+	add    edx, ebx        ;  edx has total memory
+
+	mov    MEMORY_HIGH, edx
+	mov    MEMORY_HIGH_START, 0100000h   ;  1MB start if no XMS
+	mov    EXTENDED_MEMORY_LEN, edx
+	mov    EXTENDED_MEMORY_ADDR, 0100000h   ;  1MB start
+
+	xor     eax, eax
+	mov     ax, psp_next_segment  ; get end of our program
+	shl     eax, 4                ; convert to 32 bit linear address
+				      ; PSPs are assumed as zero relative
+				      ; no offset to add
+	mov     MEMORY_LOW_START, eax
+	xor     eax, eax
+	mov     ax, 0A000h           ; DOS end of memory
+	mov     bx, psp_next_segment
+	sub     ax, bx               ; get the size in paragraphs
+	mov     edx, 16              ;
+	mul     edx                  ; multiply by 16 to get the size
+	mov     MEMORY_LOW, eax      ; size of low memory
+
+	mov     eax, MEMORY_HIGH
+	ret
+
+BIOSFunction88:
+	; int 15h, function 88 (1k blocks).
+
+	mov	ah, 88h
+	int	15h
+
+	; ax = amount of memory in 1K blocks
+
+	movzx	edx, ax         ; this function may not return all memory
+	shl	edx, 10		; convert to bytes
+
+	mov    MEMORY_HIGH, edx
+	mov    MEMORY_HIGH_START, 0100000h     ;  1MB start
+	mov    EXTENDED_MEMORY_LEN, edx
+	mov    EXTENDED_MEMORY_ADDR, 0100000h  ;  1MB start
+
+	xor     eax, eax
+	mov     ax, psp_next_segment  ; get end of our program
+	shl     eax, 4                ; convert to 32 bit linear address
+				      ; PSPs are assumed as zero relative
+				      ; no offset to add
+	mov     MEMORY_LOW_START, eax
+	xor     eax, eax
+	mov     ax, 0A000h           ; DOS end of memory
+	mov     bx, psp_next_segment
+	sub     ax, bx               ; get the size in paragraphs
+	mov     edx, 16              ;
+	mul     edx                  ; multiply by 16 to get the size
+	mov     MEMORY_LOW, eax      ; size of low memory
+
+	mov     eax, MEMORY_HIGH
+	ret
+
+DetectExtendedMemory endp
+
+
+
+;*************************************************************************
+;
+;  Return DOS Default Drive
+;
+;*************************************************************************
+
+GetDOSDefaultDrive proc near
+
+   mov	 ah, 19h   ; use MS-DOS function 19h to return the default drive
+   int	 21h
+   inc   al
+   mov	 byte ptr ds: DOS_DEFAULT_DRIVE, al
+
+IF VERBOSE
+   mov   dx, offset DOSDrive
+   call  OutputMessage
+ENDIF
+
+   ret
+
+GetDOSDefaultDrive endp
+
+;*************************************************************************
+;
+;  Return DOS Default Directory
+;
+;*************************************************************************
+
+GetDefaultDirectory proc near
+
+   mov   ax, cs
+   mov   ds, ax
+   mov	 ah, 47h
+   mov   dl, byte ptr ds: DOS_DEFAULT_DRIVE
+   mov   si, offset CurrentDir
+   int	 21h
+
+   ret
+
+GetDefaultDirectory endp
+
+
+;*************************************************************************
+;
+;  disable mouse
+;
+;*************************************************************************
+
+
+DisableMouse proc near
+
+   mov	 ax, 01fh    ; function 1fh will disable int 33 mouse requests
+   int	 33h
+
+IF VERBOSE
+   mov   dx, offset MouseOff
+   call  OutputMessage
+ENDIF
+
+   ret
+
+DisableMouse endp
+
+;*************************************************************************
+;
+;  enable mouse
+;
+;*************************************************************************
+
+
+EnableMouse proc near
+
+   mov	 ax, 020h    ; function 20h will enable int 33 mouse requests
+   int	 33h
+
+IF VERBOSE
+   mov   dx, offset MouseOn
+   call  OutputMessage
+ENDIF
+
+   ret
+
+EnableMouse endp
+
+
+
+;*************************************************************************
+;
+;  Hook MS-DOS critical error and control-c handlers
+;
+;*************************************************************************
+
+HookDOSHandlers proc near
+
+	push    es
+	xor	eax, eax
+	mov	es, ax
+
+	mov	ax, word ptr  es: (23h * 4)
+	mov	word ptr ds:DOS_CC_OFFSET, ax
+	mov	ax, word ptr es: (23h * 4 + 2)
+	mov	word ptr ds:DOS_CC_SEGMENT, ax
+	mov	word ptr es: (23h * 4), offset ControlC
+	mov	word ptr es: (23h * 4 + 2), cs
+
+	mov	ax, word ptr  es: (24h * 4)
+	mov	word ptr ds:DOS_CE_OFFSET, ax
+	mov	ax, word ptr es: (24h * 4 + 2)
+	mov	word ptr ds:DOS_CE_SEGMENT, ax
+	mov	word ptr es: (24h * 4), offset CriticalError
+	mov	word ptr es: (24h * 4 + 2), cs
+
+	pop     es
+	ret
+
+HookDOSHandlers endp
+
+;*************************************************************************
+;
+;  Unhook MS-DOS critical error and control-c handlers
+;
+;*************************************************************************
+
+UnhookDOSHandlers proc near
+
+	push    es
+	xor	eax, eax
+	mov	es, ax
+
+	mov	ax, word ptr ds:DOS_CC_OFFSET
+	mov	word ptr es: (23h * 4), ax
+	mov	ax, word ptr ds:DOS_CC_SEGMENT
+	mov	word ptr es: (23h * 4 + 2), ax
+
+	mov	ax, word ptr ds:DOS_CE_OFFSET
+	mov	word ptr es: (24h * 4), ax
+	mov	ax, word ptr ds:DOS_CE_SEGMENT
+	mov	word ptr es: (24h * 4 + 2), ax
+
+	pop     es
+	ret
+
+UnhookDOSHandlers endp
+
+
+;*************************************************************************
+;
+;  Check DOS Version
+;
+;*************************************************************************
+
+DetectDOSVersion proc near
+
+    ;
+    ; Get DOS Version.  If not 3.00 or higher, then exit
+    ;
+
+    mov	 ax, 3000h
+    int	 21h
+
+    cmp	 al, 3	      ; must be greater than or equal to 3.00
+    jae  GoodDOS
+
+    ;   Exit to DOS when if bad MS-DOS
+
+    mov    dx, offset BadDOSMsg
+    call   OutputMessage
+
+    mov    ah, 4Ch
+    xor    al, al
+    int    21h
+
+GoodDOS:
+
+IF VERBOSE
+     mov   dx, offset GoodDOSMsg
+     call  OutputMessage
+ENDIF
+
+     xor   ax, ax
+     ret
+
+DetectDOSVersion endp
+
+;*************************************************************************
+;
+;  check current processor type and state
+;
+;*************************************************************************
+
+public DetectProcessorInformation
+DetectProcessorInformation proc near
+
+    mov   ax, cs
+    mov   ds, ax
+    mov   es, ax
+
+    pushf
+    call  get_cpuid
+    call  get_fpuid
+    call  print
+    popf
+    ret
+
+DetectProcessorInformation endp
+
+get_cpuid proc near
+
+check_8086:
+
+    pushf
+    pop   ax
+    mov   cx, ax
+    and   ax, 0fffh
+    push  ax
+    popf
+    pushf
+    pop   ax
+    and   ax, 0f000h
+    cmp   ax, 0f000h    ; flag bits 12-15 are always set on an 8086
+    mov   CPU_TYPE, 0   ; 8086 detected
+    je    end_get_cpuid
+
+check_80286:
+    or    cx, 0f000h
+    push  cx
+    popf
+    pushf
+    pop   ax
+    and   ax, 0f000h   ; flag bits 12-15 are always clear on 80286 in real mode
+    mov   CPU_TYPE, 2  ; 80286 processor
+    jz    end_get_cpuid
+
+check_80386:
+    mov     bx, sp
+    and     sp, not 3
+    OPND32
+    pushf
+    OPND32
+    pop ax
+    OPND32
+    mov      cx, ax
+    OPND32   35h, 40000h
+    OPND32
+    push     ax
+    OPND32
+    popf
+    OPND32
+    pushf
+    OPND32
+    pop      ax
+    OPND32
+    xor      ax, cx       ; AC bit won't toggle, 80386 detected
+    mov      sp, bx
+    mov      CPU_TYPE, 3  ; 80386 detected
+    jz       end_get_cpuid
+
+    and      sp, not 3
+    OPND32
+    push     cx
+    OPND32
+    popf
+    mov      sp, bx     ; restore stack
+
+
+check_80486:
+    mov      CPU_TYPE, 4     ; default to 80486
+
+    OPND32
+    mov      ax, cx
+    OPND32   35h, 200000h      ; xor ID bit
+    OPND32
+    push ax
+    OPND32
+    popf
+    OPND32
+    pushf
+    OPND32
+    pop      ax
+    OPND32
+    xor      ax, cx           ; cant toggle ID bit
+    je       end_get_cpuid
+
+
+check_vendor:
+    mov     ID_FLAG, 1
+    OPND32
+    xor     ax, ax
+    CPUID
+    OPND32
+    mov     word ptr VENDOR_ID, bx
+    OPND32
+    mov     word ptr VENDOR_ID[+4], dx
+    OPND32
+    mov     word ptr VENDOR_ID[+8], cx
+    mov     si, offset VENDOR_ID
+    mov     di, offset intel_id
+    mov     cx, length intel_id
+
+compare:
+    repe    cmpsb
+    or      cx, cx
+    jnz     end_get_cpuid
+
+intel_processor:
+    mov     INTEL_PROC, 1
+
+cpuid_data:
+    OPND32
+    cmp     ax, 1
+
+    jl      end_get_cpuid
+    OPND32
+    xor     ax, ax
+    OPND32
+    inc     ax
+    CPUID
+    mov     byte ptr ds:STEPPING, al
+    and     STEPPING, STEPPING_MASK
+
+    and     al, MODEL_MASK
+    shr     al, MODEL_SHIFT
+    mov     byte ptr ds:CPU_MODEL, al
+
+    and     ax, FAMILY_MASK
+    shr     ax, FAMILY_SHIFT
+    mov     byte ptr ds:CPU_TYPE, al
+
+    mov     dword ptr FEATURE_FLAGS, edx
+
+end_get_cpuid:
+    ret
+
+get_cpuid  endp
+
+
+get_fpuid proc near
+
+    fninit
+    mov      word ptr ds:FP_STATUS, 5a5ah
+
+    fnstsw   word ptr ds:FP_STATUS
+    mov      ax, word ptr ds:FP_STATUS
+    cmp      al, 0
+
+    mov      FPU_TYPE, 0
+    jne      end_get_fpuid
+
+check_control_word:
+    fnstcw   word ptr ds:FP_STATUS
+    mov      ax, word ptr ds:FP_STATUS
+    and      ax, 103fh
+    cmp      ax, 3fh
+
+    mov      FPU_TYPE, 0
+    jne      end_get_fpuid
+    mov      FPU_TYPE, 1
+
+
+check_infinity:
+    cmp      CPU_TYPE, 3
+    jne      end_get_fpuid
+    fld1
+    fldz
+    fdiv
+    fld      st
+    fchs
+    fcompp
+    fstsw    word ptr ds:FP_STATUS
+    mov      ax, word ptr ds:FP_STATUS
+    mov      FPU_TYPE, 2
+
+    sahf
+    jz       end_get_fpuid
+    mov      FPU_TYPE, 3
+end_get_fpuid:
+    ret
+get_fpuid endp
+
+
+
+print proc near
+    cmp      ID_FLAG, 1
+    je       print_cpuid_data
+
+if (VERBOSE)
+    mov      dx, offset id_msg
+    call     OutputMessage
+endif
+
+print_86:
+    cmp      CPU_TYPE, 0
+    jne      print_286
+
+if (VERBOSE)
+    mov      dx, offset c8086
+    call     OutputMessage
+endif
+    cmp      FPU_TYPE, 0
+    je       end_print
+
+if (VERBOSE)
+    mov      dx, offset fp_8087
+    call     OutputMessage
+endif
+    jmp      end_print
+
+print_286:
+    cmp      CPU_TYPE, 2
+    jne      print_386
+if (VERBOSE)
+    mov      dx, offset c286
+    call     OutputMessage
+endif
+    cmp      FPU_TYPE, 0
+    je       end_print
+if (VERBOSE)
+    mov      dx, offset fp_80287
+    call     OutputMessage
+endif
+    jmp      end_print
+
+print_386:
+    cmp      CPU_TYPE, 3
+    jne      print_486
+if (VERBOSE)
+    mov      dx, offset c386
+    call     OutputMessage
+endif
+    cmp      FPU_TYPE, 0
+    je       end_print
+    cmp      FPU_TYPE, 2
+    jne      print_387
+if (VERBOSE)
+    mov      dx, offset fp_80287
+    call     OutputMessage
+endif
+    jmp      end_print
+
+print_387:
+if (VERBOSE)
+    mov      dx, offset fp_80387
+    call     OutputMessage
+endif
+    jmp      end_print
+
+print_486:
+    cmp      FPU_TYPE, 0
+    je       print_Intel486sx
+if (VERBOSE)
+    mov      dx, offset c486
+    call     OutputMessage
+endif
+    jmp      end_print
+
+print_Intel486sx:
+if (VERBOSE)
+    mov      dx, offset c486nfp
+    call     OutputMessage
+endif
+    jmp      end_print
+
+print_cpuid_data:
+
+cmp_vendor:
+    cmp      INTEL_PROC, 1
+    jne      not_GenuineIntel
+
+    cmp      CPU_TYPE, 4
+    jne      check_Pentium
+if (VERBOSE)
+    mov      dx, offset Intel486_msg
+    call     OutputMessage
+endif
+    jmp      print_family
+
+check_Pentium:
+    cmp      CPU_TYPE, 5
+    jne      check_PentiumPro
+if (VERBOSE)
+    mov      dx, offset Pentium_msg
+    call     OutputMessage
+endif
+    jmp      print_family
+
+check_PentiumPro:
+    cmp      CPU_TYPE, 6
+    jne      print_features
+if (VERBOSE)
+    mov      dx, offset PentiumPro_msg
+    call     OutputMessage
+endif
+
+print_family:
+
+IF VERBOSE
+    mov      dx, offset family_msg
+    call     OutputMessage
+ENDIF
+
+    mov      al, byte ptr ds:CPU_TYPE
+    mov      byte ptr dataCR, al
+    add      byte ptr dataCR, 30h
+
+IF VERBOSE
+    mov      dx, offset dataCR
+    call     OutputMessage
+ENDIF
+
+print_model:
+
+IF VERBOSE
+    mov      dx, offset model_msg
+    call     OutputMessage
+ENDIF
+
+    mov      al, byte ptr ds:CPU_MODEL
+    mov      byte ptr dataCR, al
+    add      byte ptr dataCR, 30h
+
+IF VERBOSE
+    mov      dx, offset dataCR
+    call     OutputMessage
+ENDIF
+
+print_features:
+    mov      ax, word ptr ds:FEATURE_FLAGS
+    and      ax, FPU_FLAG
+    jz       check_mce
+
+if (VERBOSE)
+    mov      dx, offset fpu_msg
+    call     OutputMessage
+ENDIF
+
+check_mce:
+    mov      ax, word ptr ds:FEATURE_FLAGS
+    and      ax, MCE_FLAG
+    jz       check_wc
+
+IF VERBOSE
+    mov      dx, offset mce_msg
+    call     OutputMessage
+ENDIF
+
+check_CMPXCHG8B:
+    mov      ax, word ptr ds:FEATURE_FLAGS
+    and      ax, CMPXCHG8B_FLAG
+    jz       check_4MB_paging
+
+IF VERBOSE
+    mov      dx, offset cmp_msg
+    call     OutputMessage
+ENDIF
+
+chekc_io_break:
+    mov      ax, word ptr ds:FEATURE_FLAGS
+    test     ax, 4
+    jz       check_4MB_paging
+
+IF VERBOSE
+    mov      dx, offset io_break_msg
+    call     OutputMessage
+ENDIF
+
+    ;	Enable Debugging Extensions bit in CR4
+    CR4_TO_ECX
+    or	ecx, 08h
+    ECX_TO_CR4
+
+if (VERBOSE)
+    mov      dx, offset io_break_enable
+    call     OutputMessage
+endif
+
+check_4MB_paging:
+    mov      ax, word ptr ds:FEATURE_FLAGS
+    test     ax, 08h
+    jz       check_PageExtend
+
+IF VERBOSE
+    mov      dx, offset page_4MB_msg
+    call     OutputMessage
+ENDIF
+
+    ;	Enable page size extension bit in CR4
+    CR4_TO_ECX
+    or	     ecx, 10h
+    ECX_TO_CR4
+
+if (VERBOSE)
+    mov      dx, offset p4mb_enable
+    call     OutputMessage
+endif
+
+check_PageExtend:
+    mov      ax, word ptr ds:FEATURE_FLAGS
+    test     ax, 40h
+    jz       check_wc
+
+;; DEBUG DEBUG DEBUG !!!
+    ;	Enable page address extension bit in CR4
+
+    ;; CR4_TO_ECX
+    ;; or	     ecx, 20h
+    ;; ECX_TO_CR4
+
+check_wc:
+    mov      dx, word ptr ds:FEATURE_FLAGS
+    test     dx, 1000h ; MTRR support flag
+    jz       end_print
+
+if (VERBOSE)
+    mov      dx, offset wc_enable
+    call     OutputMessage
+endif
+    jmp      end_print
+
+not_GenuineIntel:
+if (VERBOSE)
+    mov      dx, offset not_Intel
+    call     OutputMessage
+endif
+
+end_print:
+    ret
+print endp
+
+
+;*************************************************************************
+;
+;  check current bus type
+;
+;*************************************************************************
+
+public DetectBusInformation
+DetectBusInformation proc near
+
+    ;
+    ;  get valid data segment reference
+    ;
+
+    mov   ax, cs
+    mov	  ds, ax
+
+    ;
+    ;  everyone has an ISA interface, we assume this as default
+    ;
+
+    mov   eax, ISA
+    mov	  DOS_SYSTEM_BUS_TYPE, eax
+
+if (VERBOSE)
+    mov	  dx, offset ISABus
+    call  OutputMessage
+endif
+    ;
+    ;  check for PCI bus
+    ;
+
+    mov	  ax, 0B101h
+    int	  1Ah
+    jc	  short NotPCI
+
+    cmp	  ah, 0
+    jnz	  short NotPCI
+
+    cmp	  edx, 20494350h  ; string "PCI "
+    jnz	  short NotPCI
+
+    mov   eax, DOS_SYSTEM_BUS_TYPE
+    or	  eax, PCI
+    mov   DOS_SYSTEM_BUS_TYPE, eax
+
+if (VERBOSE)
+    mov	  dx, offset PCIBus
+    call  OutputMessage
+endif
+
+
+NotPCI:
+
+    ; micro-channel bus
+
+    mov	  ax, 0C400h
+    int	  15h
+    jc	  short NotAPS2
+
+    mov   eax, DOS_SYSTEM_BUS_TYPE
+    or	  eax, MCA
+    or	  eax, PS2
+    and	  eax, not ISA
+    mov   DOS_SYSTEM_BUS_TYPE, eax
+
+if (VERBOSE)
+    mov	  dx, offset PS2Bus
+    call  OutputMessage
+
+    mov	  dx, offset MCABus
+    call  OutputMessage
+endif
+
+NotAPS2:
+
+    ; EISA bus
+
+    mov	  ax, 0F000h
+    mov	  es, ax
+    mov	  bx, 0FFD9h
+    cmp	  dword ptr es:[bx], 'ASIE'
+    jne	  short NotAnEISAMachine
+
+    mov   eax, DOS_SYSTEM_BUS_TYPE
+    or	  eax, EISA or ISA
+    mov   DOS_SYSTEM_BUS_TYPE, eax
+
+if (VERBOSE)
+    mov	  dx, offset EISABus
+    call  OutputMessage
+endif
+
+NotAnEISAMachine:
+
+    ; PCMCIA bus
+
+    mov	  ax, 0AF0Bh
+    mov	  cx, 0Eh
+    sub	  sp, 10h
+    mov	  bx, ss
+    mov	  es, bx
+    mov	  bx, sp
+    int	  1Ah
+    pop	  ax
+    pop	  ax
+    add	  sp, (10h - 4)
+    cmp	  ax, 04353h
+    jz	  short IsPCMCIA
+
+    cmp	  ax, 05343h
+    jnz	  short NotPCMCIA
+
+
+IsPCMCIA:
+    mov   eax, DOS_SYSTEM_BUS_TYPE
+    or	  eax, PCMCIA
+    mov   DOS_SYSTEM_BUS_TYPE, eax
+
+if (VERBOSE)
+    mov	  dx, offset PCMCIABus
+    call  OutputMessage
+endif
+
+NotPCMCIA:
+
+    xor   al, al
+    ret
+
+DetectBusInformation endp
+
+;*************************************************************************
+;
+;  Output Message (function 9, int 21)
+;
+;*************************************************************************
+
+OutputMessage proc near
+
+   push  cs
+   pop   ax
+   mov   ds, ax
+   mov   ah, 9h
+   int   21h
+   ret
+
+OutputMessage endp
+
+
+;*************************************************************************
+;
+;  BitLine20 - Enables address line 20 in the 8042 Keyboard Controller
+;
+;*************************************************************************
+
+BitLine20	proc	near
+
+	;
+	;  if we are on a PS/2 system, then the procedure is different
+	;
+
+	mov     eax, DOS_SYSTEM_BUS_TYPE
+	and     eax, PS2
+	cmp     eax, 0
+	jne     short PS2Line20Enable
+
+LoopOne:
+	in	al, SYSTEM_STATUS_PORT
+	test	al, 2
+	jnz	LoopOne
+
+	mov	ax, 7FFFh
+DelayOne:
+	dec	ax
+	jnz	DelayOne
+
+	mov	al, 0D1h
+	out	SYSTEM_STATUS_PORT, al
+
+LoopTwo:
+	in	al, SYSTEM_STATUS_PORT
+	test	al, 2
+	jnz	LoopTwo
+
+	mov	ax, 7FFFh
+DelayTwo:
+	dec	ax
+	jnz	DelayTwo
+
+	mov	al, 0DFh		;  enable bit 20
+	out	SYSTEM_PORTA, al
+
+LoopThree:
+	in	al, SYSTEM_STATUS_PORT
+	test	al, 2
+	jnz	LoopThree
+
+	mov	ax, 7FFFh
+DelayThree:
+	dec	ax
+	jnz	DelayThree
+
+IF VERBOSE
+	mov     dx, offset Line20Msg
+	call    OutputMessage
+ENDIF
+
+	ret
+
+PS2Line20Enable:
+	in	al, SYSTEM_PORTA
+	mov	cx, 0FFFFh
+
+DelayFour:
+	nop
+	nop
+	loop	DelayFour
+
+	or	al, 02h
+	out	SYSTEM_PORTA, al
+
+IF VERBOSE
+	mov     dx, offset Line20PS2
+	call    OutputMessage
+ENDIF
+
+	ret
+
+BitLine20	endp
+
+
+;*************************************************************************
+;
+;  DisableBitLine20 - Disables address line 20 in the 8042 Keyboard
+;                     Controller
+;
+;*************************************************************************
+
+
+DisableLine20 proc near
+
+	;
+	;  if we are on a PS/2 system, then the procedure is different
+	;
+
+	mov     eax, DOS_SYSTEM_BUS_TYPE
+	and     eax, PS2
+	cmp     eax, 0
+	je      NonPS2Line20Disable
+
+	in	al, SYSTEM_CONTROL_PORTA
+	and	al, 0FDh
+
+	mov	cx, 07FFFh
+DelayFive:
+	nop				;do something that will take awhile
+	nop
+	loop	DelayFive
+
+	out	SYSTEM_CONTROL_PORTA, al
+	jmp	Line20Off
+
+
+NonPS2Line20Disable:
+
+DelaySix:
+	in	al, SYSTEM_STATUS_PORT
+	test	al, 2
+	jnz     DelaySix
+
+	mov	cx, 07FFFh
+DelaySeven:
+	nop
+	nop
+	loop	DelaySeven
+
+	mov	al, 0D1h
+	out	SYSTEM_STATUS_PORT, al
+
+DelayEight:
+	in	al, SYSTEM_STATUS_PORT
+	test	al, 2
+	jnz	DelayEight
+
+	mov	cx, 07FFFh
+DelayNine:
+	nop
+	loop	DelayNine
+
+	mov	al, 0DDh
+	out	SYSTEM_PORTA, al
+
+DelayTen:
+	in	al, SYSTEM_STATUS_PORT
+	test	al, 2
+	jnz	DelayTen
+
+	mov	cx, 07FFFh
+DelayEleven:
+	nop
+	nop
+	loop	DelayEleven
+
+Line20Off:
+	ret
+
+DisableLine20 endp
+
+
+;*************************************************************************
+;
+;  MS-DOS int 24 critical error handler
+;
+;*************************************************************************
+
+CriticalError:
+	iret
+
+;*************************************************************************
+;
+;  MS-DOS int 23 Conrtrol-C Break handler
+;
+;*************************************************************************
+
+ControlC:
+	iret
+
+;*************************************************************************
+;
+;  32-bit relocation code for a PE Format Executable
+;
+;  The PE will already have absolute fixups that were provided by the
+;  PE Format linker.  For memory mapped PEs, these fixups do not
+;  need to be modified provided the 'CODE' and 'DATA' sections
+;  are loaded and mapped to the addresses specified in the section
+;  headers.  For OS load, however, we wil perform an absolute
+;  fixup for physical=logical.  This is rather complex, but this
+;  function relocates the PE image we appended to our init.exe
+;  startup code, and modifies the code and data section images
+;  with the reloc table provided by the PE linker.
+;
+;  NOTE:  This function generates segment:offset pairs relative
+;  the index specified in the reloc table, and as such, handles
+;  cases for wrap when relocating the image in real mode.  This
+;  function will perform relocation fixups on any PE loaded under
+;  1MB, and handles 'CODE' and 'DATA' sections that exceed a single
+;  64K segment in size.
+;
+;*************************************************************************
+;
+;   fixup local variables
+;
+
+   align 16
+PE_BASE_ADDR          dd     0
+code_rva_fixup        dd     0
+data_rva_fixup        dd     0
+code_addr_fixup       dd     0
+data_addr_fixup       dd     0
+reloc_addr_fixup      dd     0
+section_rva           dd     0
+code_segment_fixup    dw     0
+data_segment_fixup    dw     0
+reloc_segment_fixup   dw     0
+fixup_reserved        dw     0
+code_offset_fixup     dw     0
+data_offset_fixup     dw     0
+reloc_offset_fixup    dw     0
+fixup_offreserved     dw     0
+
+   align 16
+public PEFixup
+PEFixup proc near
+	mov    ax, cs
+	mov    ds, ax
+
+	mov    eax, dword ptr ds:startup_32_code  ; if llink has not been run
+	or     eax, eax                           ; exit with error
+	jz     FixupError
+
+	mov    ecx, dword ptr ds:code_rva         ; code virtual address from section
+	mov    edx, dword ptr ds:data_rva         ; data virtual address from section
+	mov    eax, dword ptr ds:pe_base          ; PE Base Address
+	mov    dword ptr cs:code_rva_fixup, ecx   ; save code rva
+	mov    dword ptr cs:data_rva_fixup, edx   ; save data rva
+	mov    dword ptr cs:PE_BASE_ADDR, eax
+
+	;   next we map segment pointers to be used with 'CODE',
+	;   'DATA', and '.reloc' to create a relative offset
+
+	xor    eax, eax
+	mov    ax, cs
+	shl    eax, 4
+	add    eax, dword ptr ds:startup_32_code
+	mov    dword ptr cs:code_addr_fixup, eax   ;  save 'CODE'
+	mov    edx, eax
+	and    eax, 0Fh  ; get 16 byte offset
+	shr    edx, 4    ; convert 32-bit address to segment pointer
+	mov    word ptr cs:code_segment_fixup, dx
+	mov    word ptr cs:code_offset_fixup, ax
+
+	xor    eax, eax
+	mov    ax, cs
+	shl    eax, 4
+	add    eax, dword ptr ds:startup_32_data
+	mov    dword ptr cs:data_addr_fixup, eax   ;  save 'DATA'
+	mov    edx, eax
+	and    eax, 0Fh  ; get 16 byte offset
+	shr    edx, 4    ; convert 32-bit address to segment pointer
+	mov    word ptr cs:data_segment_fixup, dx
+	mov    word ptr cs:data_offset_fixup, ax
+
+	xor    eax, eax
+	mov    ax, cs
+	shl    eax, 4
+	add    eax, dword ptr ds:startup_reloc
+	mov    dword ptr cs:reloc_addr_fixup, eax   ;  save reloc
+	mov    edx, eax
+	and    eax, 0Fh  ; get 16 byte offset
+	shr    edx, 4    ; convert 32-bit address to segment pointer
+	mov    word ptr cs:reloc_segment_fixup, dx
+	mov    word ptr cs:reloc_offset_fixup, ax
+
+	mov    es, dx     ; select es: = reloc_segment
+	mov    bx, ax     ; select [bx] = reloc_offset (should check for wrap)
+	jmp    next_block
+
+	;
+	;  Here we adjust the es:[bx] index to the next reloc
+	;  section header to prevent wrap
+	;
+reset_reloc_segment:
+	xor    eax, eax  ; adjust segment:offset of reloc table
+	xor    ecx, ecx  ; to avoid segment wrap
+	mov    ax, es
+	shl    eax, 4
+	mov    cx, bx
+	add    eax, ecx  ; convert to 32-bit linear address
+	mov    edx, eax  ; EAX = EDX = 32-bit linear address
+	and    eax, 0Fh  ; get 16 byte offset
+	shr    edx, 4    ; convert 32-bit address to segment pointer
+	mov    es, dx    ; select es: = reloc_segment
+	mov    bx, ax    ; select [bx] = reloc_offset
+
+next_block:
+	mov    eax, dword ptr es:[bx].VirtualAddress
+	mov    dword ptr cs:section_rva, eax  ;  save virtual address
+
+	mov    ecx, dword ptr es:[bx].SizeOfBlock
+	or     ecx, ecx          ; if SizeOfBlock == 0, reloc complete
+	jz     FixupComplete
+
+	sub    ecx, SIZE IMAGE_BASE_RELOCATION   ; subtract reloc header
+	shr    ecx, 1                            ; convert to WORDs
+	add    bx, SIZE IMAGE_BASE_RELOCATION    ; bump the ptr to relocs
+
+fixup_image:
+	; set ds: = code / data based on section rva
+
+	mov    eax, dword ptr cs:section_rva    ; get reloc section rva
+	cmp    eax, dword ptr cs:data_rva_fixup
+	jl     code_seg
+
+data_seg:
+	mov    ax, word ptr es:[bx]             ; get pEntry
+	and    ax, 0F000h                       ; test for HIGHLOW
+	shr    ax, 12                           ; top 4 bits has type
+	cmp    ax, 3                            ; 3 = HIGHLOW fixup
+	jne    SkipAbsolute1                    ; Intel Fixup Type
+						; ignore 'ABSOLUTE'
+						; fixups
+	mov    di, word ptr es:[bx]             ; get pEntry
+	and    di, 0FFFh                        ; get offset
+
+	xor    eax, eax  ; adjust segment:offset of data image to
+	xor    edx, edx  ; avoid wrap
+	mov    ax, cs:data_segment_fixup        ; get data segment
+	shl    eax, 4
+	mov    dx, cs:data_offset_fixup         ; get data offset
+	add    eax, edx                         ; add segment:offset
+
+	mov    edx, dword ptr cs:section_rva    ; get current reloc rva
+	sub    edx, dword ptr cs:data_rva_fixup ; subtract current section rva
+	add    eax, edx
+
+	mov    edx, eax  ; EAX = EDX = 32-bit linear address
+	and    eax, 0Fh  ; get 16 byte offset
+	shr    edx, 4    ; convert 32-bit address to segment pointer
+	mov    ds, dx    ; ds: = current section
+	add    di, ax    ; add offsets di: = index
+			 ; this gives us the offset into
+			 ; the image
+
+	mov    eax, dword ptr ds:[di]           ; read location
+
+	sub    eax, dword ptr cs:PE_BASE_ADDR             ; subtract PE Base Addr
+	mov    edx, eax
+	and    edx, 000F0000h                   ; remove offset for section
+	cmp    edx, dword ptr cs:data_rva_fixup ; compare to code/data rva
+	jl     sub_code1
+
+	sub    eax, dword ptr cs:data_rva_fixup           ; sub data rva
+	add    eax, dword ptr cs:data_addr_fixup          ; add actual address
+	mov    dword ptr ds:[di], eax           ; write location
+
+	add    bx, 2                            ; bump to next entry
+	or     bx, bx
+	jz     FixupError
+
+	dec    ecx
+	or     ecx, ecx
+	jnz    fixup_image
+	jmp    reset_reloc_segment
+
+sub_code1:
+	sub    eax, dword ptr cs:code_rva_fixup           ; sub code rva
+	add    eax, dword ptr cs:code_addr_fixup          ; add actual address
+	mov    dword ptr ds:[di], eax           ; write location
+
+SkipAbsolute1:
+	add    bx, 2                            ; bump to next entry
+	or     bx, bx
+	jz     FixupError
+
+	dec    ecx
+	or     ecx, ecx
+	jnz    fixup_image
+	jmp    reset_reloc_segment
+
+code_seg:
+	mov    ax, word ptr es:[bx]             ; get pEntry
+	and    ax, 0F000h                       ; test for HIGHLOW
+	shr    ax, 12                           ; top 4 bits has type
+	cmp    ax, 3                            ; 3 = HIGHLOW fixup
+	jne    SkipAbsolute2                    ; Intel Fixup Type
+						; ignore 'ABSOLUTE'
+						; fixups
+
+	mov    di, word ptr es:[bx]             ; get pEntry
+	and    di, 0FFFh                        ; get offset
+
+	xor    eax, eax   ; adjust segment:offset of code image
+	xor    edx, edx   ; to avoid wrap
+	mov    ax, cs:code_segment_fixup        ; get code segment
+	shl    eax, 4
+	mov    dx, cs:code_offset_fixup         ; get code offset
+	add    eax, edx                         ; add segment:offset
+
+	mov    edx, dword ptr cs:section_rva    ; get current reloc rva
+	sub    edx, dword ptr cs:code_rva_fixup ; subtract current section rva
+	add    eax, edx
+
+	mov    edx, eax  ; EAX = EDX = 32-bit linear address
+	and    eax, 0Fh  ; get 16 byte offset
+	shr    edx, 4    ; convert 32-bit address to segment pointer
+	mov    ds, dx    ; ds: = current section
+	add    di, ax    ; add offsets di: = index
+			 ; this gives us the offset into
+			 ; the image
+	mov    eax, dword ptr ds:[di]           ; read location
+
+	sub    eax, dword ptr cs:PE_BASE_ADDR             ; subtract PE Base Addr
+	mov    edx, eax
+	and    edx, 000F0000h                   ; remove offset for section
+	cmp    edx, dword ptr cs:data_rva_fixup ; compare to code/data rva
+	jl     sub_code2
+
+	sub    eax, dword ptr cs:data_rva_fixup           ; sub data rva
+	add    eax, dword ptr cs:data_addr_fixup          ; add actual address
+	mov    dword ptr ds:[di], eax           ; write location
+
+	add    bx, 2                            ; bump to next entry
+	or     bx, bx
+	jz     FixupError
+
+	dec    ecx
+	or     ecx, ecx
+	jnz    fixup_image
+	jmp    reset_reloc_segment
+
+sub_code2:
+	sub    eax, dword ptr cs:code_rva_fixup           ; sub code rva
+	add    eax, dword ptr cs:code_addr_fixup          ; add actual address
+	mov    dword ptr ds:[di], eax           ; write location
+
+SkipAbsolute2:
+	add    bx, 2                            ; bump to next entry
+	or     bx, bx
+	jz     FixupError
+
+	dec    ecx
+	or     ecx, ecx
+	jnz    fixup_image
+	jmp    reset_reloc_segment
+
+FixupComplete:
+	mov    ax, cs
+	mov    ds, ax
+	ret
+
+FixupError:
+
+	mov    ax, cs
+	mov    ds, ax
+
+	mov    dx, offset FixupErrorMsg
+	call   OutputMessage
+	ret
+
+PEFixup endp
+
+public RealMode16SegmentEnd
+RealMode16SegmentEnd   label   dword
+
+INITCODE ENDS
+
+END

@@ -1,0 +1,1318 @@
+
+
+;***************************************************************************
+;
+;   Copyright (c) 1997, 1998 Timpanogas Research Group, Inc.  All Rights
+;                            Reserved.
+;
+;   This program is an unpublished work of TRG, Inc. and contains
+;   trade secrets and other proprietary information.  Unauthorized
+;   use, copying, disclosure, or distribution of this file without the
+;   consent of TRG, Inc. can subject the offender to severe criminal
+;   and/or civil penalities.
+;
+;
+;   AUTHOR   :  Jeff V. Merkey
+;   FILE     :  LLOADER.386
+;   DESCRIP  :  Protected Mode Loader Code for MANOS v1.0
+;   DATE     :  November 12, 1997
+;
+;
+;***************************************************************************
+
+.486P         ; select the processor
+model flat
+
+include dos.inc
+include ia32.inc
+
+PS2                    EQU   4
+EXCEPTION_ENTRIES      EQU   19
+RESUME_FLAG            EQU   00010000h
+NESTED_TASK_FLAG       EQU   00004000h
+SINGLE_STEP_FLAG       EQU   00000100h
+
+OperSize	macro
+	db	66h
+	endm
+
+AddrSize	macro
+	db	67h
+	endm
+
+Synch   macro
+	LOCAL L1, L2, L3
+
+	jmp	short L1
+L1:
+	jmp	short L2
+L2:
+	jmp	short L3
+L3:
+	endm
+
+
+	CGROUP GROUP  _TEXT
+	DGROUP GROUP  _DATA
+	ASSUME  cs:_TEXT, ds:_DATA, es:_DATA, fs:_DATA
+
+_DATA SEGMENT PUBLIC USE32 'DATA'
+
+   align 16
+public DOSDataTable
+DOSDataTable               dd    0
+
+   align 16
+public debug_stack
+debug_stack       db      100h dup (0)
+debug_stack_top  label dword
+
+   align 16
+public debug_NMIstack
+debug_NMIstack       db      100h dup (0)
+debug_NMIstack_top  label dword
+
+   align 16
+public debug_DFstack
+debug_DFstack       db      100h dup (0)
+debug_DFstack_top  label dword
+
+   align 16
+public initial_stack
+initial_stack       db    200h dup (0)
+initial_stack_top  label dword
+
+   align 16
+public ProcessorTaskIndex
+ProcessorTaskIndex         dd   0
+
+   align 16
+public ExceptionTaskIndex
+ExceptionTaskIndex         dd   EXCEPTION_ENTRIES dup (0)
+
+   align 16
+public ProcessorSegmentTable
+ProcessorSegmentTable      dd   0
+
+   align 16
+public ExceptionSegmentTable
+ExceptionSegmentTable      dd   EXCEPTION_ENTRIES dup (0)
+
+   align 16
+public HandlerTable
+HandlerTable    dd       DivideError          ;0
+		dd       DebuggerInt1         ;1
+		dd       NMI                  ;2
+		dd       DebuggerInt3         ;3
+		dd       Overflow             ;4
+		dd       BoundsCheck          ;5
+		dd       InvalidOpcode        ;6
+		dd       NoCoprocessor        ;7
+		dd       DoubleFault          ;8
+		dd       Cops                 ;9
+		dd       TSSCheck             ;10
+		dd       SegmentNotPresent    ;11
+		dd       StackException       ;12
+		dd       GeneralProtection    ;13
+		dd       PageFault            ;14
+		dd       InvalidInterrupt     ;15
+		dd       CoProcessorError     ;16
+		dd       AlignmentCheck       ;17
+		dd       MachineCheck         ;18
+		dd	 InvalidInterrupt     ;19
+		dd	 InvalidInterrupt     ;20
+		dd	 InvalidInterrupt     ;21
+		dd	 InvalidInterrupt     ;22
+		dd	 InvalidInterrupt     ;23
+		dd	 InvalidInterrupt     ;24
+		dd	 InvalidInterrupt     ;25
+		dd	 InvalidInterrupt     ;26
+		dd	 InvalidInterrupt     ;27
+		dd	 InvalidInterrupt     ;28
+		dd	 InvalidInterrupt     ;29
+		dd	 InvalidInterrupt     ;30
+		dd	 InvalidInterrupt     ;31
+		dd	 InvalidInterrupt     ;32
+		dd	 InvalidInterrupt     ;33
+		dd	 InvalidInterrupt     ;34
+		dd	 InvalidInterrupt     ;35
+		dd	 InvalidInterrupt     ;36
+		dd	 InvalidInterrupt     ;37
+		dd	 InvalidInterrupt     ;38
+		dd	 InvalidInterrupt     ;39
+		dd	 HW0	 	      ;40 / 28h
+		dd	 HW1                  ;41
+		dd	 HW2 		      ;42
+		dd	 HW3  		      ;43
+		dd	 HW4  		      ;44
+		dd	 HW5  		      ;45
+		dd	 HW6   		      ;46
+		dd	 HW7  		      ;47
+		dd	 InvalidInterrupt     ;48
+		dd	 InvalidInterrupt     ;49
+		dd	 InvalidInterrupt     ;50
+		dd	 InvalidInterrupt
+		dd	 InvalidInterrupt
+		dd	 InvalidInterrupt
+		dd	 InvalidInterrupt
+		dd	 InvalidInterrupt
+		dd	 InvalidInterrupt
+		dd	 InvalidInterrupt
+		dd	 InvalidInterrupt
+		dd	 InvalidInterrupt
+		dd	 InvalidInterrupt     ;60
+		dd	 InvalidInterrupt
+		dd	 InvalidInterrupt
+		dd	 InvalidInterrupt
+		dd	 InvalidInterrupt
+		dd	 InvalidInterrupt
+		dd	 InvalidInterrupt
+		dd	 InvalidInterrupt
+		dd	 InvalidInterrupt
+		dd	 InvalidInterrupt
+		dd	 InvalidInterrupt     ;70
+		dd	 InvalidInterrupt
+		dd	 InvalidInterrupt
+		dd	 InvalidInterrupt
+		dd	 InvalidInterrupt
+		dd	 InvalidInterrupt
+		dd	 InvalidInterrupt
+		dd	 InvalidInterrupt
+		dd	 InvalidInterrupt
+
+		dd	 SpuriousVector       ;79 / 4Fh
+		dd	 InvalidInterrupt     ;80
+		dd	 InvalidInterrupt
+		dd	 InvalidInterrupt
+		dd	 InvalidInterrupt
+		dd	 InvalidInterrupt
+		dd	 InvalidInterrupt
+		dd	 InvalidInterrupt
+		dd	 InvalidInterrupt
+		dd	 InvalidInterrupt
+		dd	 InvalidInterrupt
+		dd	 InvalidInterrupt     ;90
+		dd	 InvalidInterrupt
+		dd	 InvalidInterrupt
+		dd	 InvalidInterrupt
+		dd	 InvalidInterrupt
+		dd	 InvalidInterrupt
+		dd	 InvalidInterrupt
+		dd	 InvalidInterrupt
+		dd	 InvalidInterrupt
+		dd	 InvalidInterrupt
+		dd	 InvalidInterrupt     ;100
+		dd	 InvalidInterrupt
+		dd	 InvalidInterrupt
+		dd	 InvalidInterrupt
+		dd	 InvalidInterrupt
+		dd	 InvalidInterrupt
+		dd	 InvalidInterrupt
+		dd	 InvalidInterrupt
+		dd	 InvalidInterrupt
+		dd	 InvalidInterrupt
+		dd	 InvalidInterrupt     ;110
+		dd	 InvalidInterrupt
+		dd	 HW8   		      ;112
+		dd	 HW9  		      ;113
+		dd	 HW10		      ;114
+		dd	 HW11		      ;115
+		dd	 HW12		      ;116
+		dd	 HW13		      ;117
+		dd	 HW14		      ;118
+		dd	 HW15		      ;119
+		dd	 InvalidInterrupt     ;120
+		dd	 InvalidInterrupt
+		dd	 InvalidInterrupt
+		dd	 InvalidInterrupt
+		dd	 InvalidInterrupt
+		dd	 InvalidInterrupt
+		dd	 InvalidInterrupt
+		dd	 InvalidInterrupt
+		dd	 InvalidInterrupt
+		dd	 InvalidInterrupt
+		dd	 HW16                 ;130
+		dd	 HW17
+		dd	 HW18
+		dd	 HW19
+		dd	 HW20
+		dd	 HW21
+		dd	 HW22
+		dd	 HW23
+		dd	 HW24
+		dd	 HW25
+		dd	 HW26                 ;140
+		dd	 HW27
+		dd	 HW28
+		dd	 HW29
+		dd	 HW30
+		dd	 HW31
+		dd	 HW32
+		dd	 HW33
+		dd	 HW34
+		dd	 HW35
+		dd	 HW36   	      ;150
+		dd	 HW37
+		dd	 HW38
+		dd	 HW39
+		dd	 HW40
+		dd	 HW41
+		dd	 HW42
+		dd	 HW43
+		dd	 HW44
+		dd	 HW45
+		dd	 HW46  		      ;160
+		dd	 HW47
+		dd	 HW48
+		dd	 HW49
+		dd	 HW50
+		dd	 HW51
+		dd	 HW52
+		dd	 HW53
+		dd	 HW54
+		dd	 HW55
+		dd	 HW56
+		dd	 HW57   	      ;170
+		dd	 HW58
+		dd	 HW59
+		dd	 HW60
+		dd	 HW61
+		dd	 HW62
+		dd	 HW63
+		dd	 HW64
+		dd	 HW65
+
+		dd	 InvalidInterrupt     ;180
+		dd	 InvalidInterrupt
+		dd	 InvalidInterrupt
+		dd	 InvalidInterrupt
+		dd	 InvalidInterrupt
+		dd	 InvalidInterrupt
+		dd	 InvalidInterrupt
+		dd	 InvalidInterrupt
+		dd	 InvalidInterrupt
+		dd	 InvalidInterrupt
+		dd	 InvalidInterrupt     ;190
+		dd	 InvalidInterrupt
+		dd	 InvalidInterrupt
+		dd	 InvalidInterrupt
+		dd	 InvalidInterrupt
+		dd	 InvalidInterrupt
+		dd	 InvalidInterrupt
+		dd	 InvalidInterrupt
+		dd	 InvalidInterrupt
+		dd	 InvalidInterrupt
+		dd	 InvalidInterrupt     ;200
+		dd	 InvalidInterrupt
+		dd	 InvalidInterrupt
+		dd	 InvalidInterrupt
+		dd	 InvalidInterrupt
+		dd	 InvalidInterrupt
+		dd	 InvalidInterrupt
+		dd	 InvalidInterrupt
+		dd	 InvalidInterrupt
+		dd	 InvalidInterrupt
+		dd	 InvalidInterrupt     ;210
+		dd	 InvalidInterrupt
+		dd	 InvalidInterrupt
+		dd	 InvalidInterrupt
+		dd	 InvalidInterrupt
+		dd	 InvalidInterrupt
+		dd	 InvalidInterrupt
+		dd	 InvalidInterrupt
+		dd	 InvalidInterrupt
+		dd	 InvalidInterrupt
+		dd	 InvalidInterrupt     ;220
+		dd	 InvalidInterrupt
+		dd	 InvalidInterrupt
+		dd	 InvalidInterrupt
+		dd	 InvalidInterrupt
+		dd	 InvalidInterrupt
+		dd	 InvalidInterrupt
+		dd	 InvalidInterrupt
+		dd	 InvalidInterrupt
+		dd	 InvalidInterrupt
+		dd	 InvalidInterrupt     ;230
+		dd	 InvalidInterrupt
+		dd	 InvalidInterrupt
+		dd	 InvalidInterrupt
+		dd	 InvalidInterrupt
+		dd	 InvalidInterrupt
+		dd	 InvalidInterrupt
+		dd	 InvalidInterrupt
+		dd	 InvalidInterrupt
+		dd	 InvalidInterrupt
+		dd	 InvalidInterrupt     ;240
+		dd	 InvalidInterrupt
+		dd	 InvalidInterrupt
+		dd	 InvalidInterrupt
+		dd	 InvalidInterrupt
+		dd	 InvalidInterrupt
+		dd	 InvalidInterrupt
+		dd	 InvalidInterrupt
+		dd	 InvalidInterrupt
+		dd	 InvalidInterrupt
+		dd	 InvalidInterrupt     ;250
+		dd	 InvalidInterrupt
+		dd	 InvalidInterrupt
+		dd	 InvalidInterrupt
+		dd	 InvalidInterrupt
+		dd	 InvalidInterrupt
+HandlerTableEnd    label   dword
+SystemIDTEntryNumber       equ    ((HandlerTableEnd - HandlerTable) / 4)
+
+   align 16
+public ProcessorIDT0
+ProcessorIDT0	label	word
+rept	EXCEPTION_ENTRIES
+	   TSSGate		<>
+	endm
+rept	(SystemIDTEntryNumber - EXCEPTION_ENTRIES)
+	   IDTDescriptor	<>
+	endm
+
+   align 16
+public ProcessorIDTTable0
+ProcessorIDTTable0	label	pword
+		dw      (SystemIDTEntryNumber * 8)
+		dd	ProcessorIDT0
+
+
+   align 16
+public SystemIDTTable
+SystemIDTTable    label pword
+   SystemIDTIndex	 dw  0
+   SystemIDTOffset	 dd  0
+
+   align 16
+public IDTSegments
+IDTSegments label dword
+IDTSegmentTable		   dd      ProcessorIDT0
+IDTSegmentsEnd label dword
+
+NumberOfIDTTables        EQU     ((IDTSegmentsEnd - IDTSegments) / 4)
+
+   align 16
+public IDTPointers
+IDTPointers label dword
+IDTPointerTable		   dd      ProcessorIDTTable0
+IDTPointersEnd label dword
+
+NumberOfIDTPointers        EQU     ((IDTPointersEnd - IDTPointers) / 4)
+
+   align 16
+public StartOfSystemGDT
+StartOfSystemGDT   label dword
+public pNullGDT
+pNullGDT	GDTDescriptor	<>              ; 00h
+pCodeSegment	GDTDescriptor	<,,,9Ah>        ; 08h
+pDataSegment	GDTDescriptor	<>              ; 10h
+pRealModeCode   GDTDescriptor	<,,,9Ah,0>      ; 18h
+pRealModeData	GDTDescriptor	<,,,,0>         ; 20h
+pBIOSCode 	GDTDescriptor	<,,,9Ah,0C0h>   ; 28h
+pBIOSData 	GDTDescriptor	<,,,,0C0h>      ; 30h
+pRealIntCode	GDTDescriptor	<,,,9Ah,0>      ; 38h
+pRealIntData	GDTDescriptor	<,,,,0>         ; 40h
+
+public TSSDefaultDescriptors                    ; starts at 48h
+TSSDefaultDescriptors         label	dword
+	TSSDescriptor	<>
+
+public TSSDescriptors
+TSSDescriptors         label	dword
+rept	EXCEPTION_ENTRIES
+	   TSSDescriptor	<>
+	endm
+
+EndOfSystemGDT   label dword
+
+
+public TSSDefaultSegments
+TSSDefaultSegments            label	dword
+       TaskStateSegment	<>
+
+public TSSSegments
+TSSSegments            label	dword
+rept	EXCEPTION_ENTRIES
+       TaskStateSegment	<>
+	endm
+
+SystemGDTSize                EQU   (EndOfSystemGDT - StartOfSystemGDT)
+TSSDefaultSegmentIndex       EQU   (TSSDefaultDescriptors - StartOfSystemGDT)
+TSSSegmentIndex              EQU   (TSSDescriptors - StartOfSystemGDT)
+
+   align 16
+public SystemGDTTable
+SystemGDTTable     label pword
+SystemGDTIndex     dw    SystemGDTSize
+SystemGDTOffset    dd    pNullGDT
+
+   align 16
+saved_stack        dd     0
+
+   align 16
+RealModeStack      db     400h dup (0)
+RealModeStackTop   db     100h dup (0)
+
+   align 16
+savedPaging        dd     0
+
+   align 16
+SavePagingStack    db     400h dup (0)
+SavePagingStackTop db     100h dup (0)
+
+_DATA ENDS
+
+_TEXT SEGMENT PUBLIC USE32 'CODE'
+
+    ASSUME  cs:_TEXT, ds:_DATA, es:_DATA, fs:_DATA
+
+	extrn loader_main: near
+	extrn ExitLoader: near
+
+save_context    macro
+	push     eax
+	push     ebx
+	push     ecx
+	push     edx
+	push     ebp
+	push     esi
+	push     edi
+	push     ds
+	push     es
+	push     fs
+
+	endm
+
+restore_context      macro
+	pop     fs
+	pop     es
+	pop     ds
+	pop     edi
+	pop     esi
+	pop     ebp
+	pop     edx
+	pop     ecx
+	pop     ebx
+	pop     eax
+
+	iretd
+
+	endm
+
+;
+;   TSS entry code
+;
+
+task_entry     macro
+	LOCAL   @TSSNotNested, @NoLTR
+
+	cli
+	xor    eax, eax
+	str    ax
+	mov    esi, offset SystemGDTTable
+	mov    esi, dword ptr [esi + 2]
+	lea    ebx, [esi + eax]
+	mov    al, [ebx].TSSBase2
+	mov    ah, [ebx].TSSBase3
+	shl    eax, 16
+	mov    ax, [ebx].TSSBase1
+
+	;
+	;  eax -> TSS Segment (Current)
+	;  ebx -> TSS Descriptor (Current)
+	;
+
+	movzx  ecx, word ptr [eax].tBackLink
+	or     ecx, ecx
+	jz     @TSSNotNested
+
+	mov    esi, offset SystemGDTTable
+	mov    esi, dword ptr [esi + 2]
+	lea    edx, [esi + ecx]
+	mov    cl, [edx].TSSBase2
+	mov    ch, [edx].TSSBase3
+	shl    ecx, 16
+	mov    cx, [edx].TSSBase1
+	mov    ebp, ecx
+
+	;
+	;  edx -> TSS Descriptor (Previous)
+	;  ebp -> TSS Segment (Previous)
+	;
+	;  clear busy state and reset TSS
+	;
+
+	mov     [edx].TSSType, 10001001b
+
+@TSSNotNested:
+	mov     [ebx].TSSType, 10001001b
+
+	lgdt    ds: SystemGDTTable     ; reset GDT TSS Busy bit
+
+	movzx   eax, word ptr [eax].tBackLink
+	or      eax, eax
+	jz      @NoLTR
+
+	ltr     ax
+
+@NoLTR:
+	mov     eax, CR0
+	and     eax, 0FFFFFFF7h     ; clear task switch bit in CR0 to
+	mov     CR0, eax            ; avoid NPX exceptions
+
+	xor	eax, eax
+	mov	dr7, eax            ; disable breakpoints
+
+	pushfd
+	and	dword ptr [esp], NOT (NESTED_TASK_FLAG OR SINGLE_STEP_FLAG)
+	or	dword ptr [esp], RESUME_FLAG
+	popfd
+
+	push    ebp         ;  pass the TSS
+
+	endm
+
+;
+;  TSS exit code
+;
+
+task_exit   macro
+	pop     ebp
+
+	mov	gs, [ebp].tGS
+	mov	fs, [ebp].tFS
+	mov	ss, [ebp].tSS
+	mov	es, [ebp].tES
+	mov	ds, [ebp].tDS
+
+	mov	edi, [ebp].tEDI
+	mov	esi, [ebp].tESI
+	mov	edx, [ebp].tEDX
+	mov	ecx, [ebp].tECX
+	mov	ebx, [ebp].tEBX
+	mov	eax, [ebp].tEAX
+
+	mov	esp, [ebp].tESP
+	push	[ebp].tSystemFlags
+	push	dword ptr [ebp].tCS
+	push	[ebp].tEIP
+	mov	ebp, [ebp].tEBP    ; ebp is the last register we restore
+
+	iretd
+
+	endm
+
+RDMSR   macro
+	db  0Fh
+	db  30h
+	endm
+
+WRMSR   macro
+	db  0Fh
+	db  32h
+	endm
+
+public MANOSStartup
+MANOSStartup  proc
+	cli
+	mov    DOSDataTable, ebx
+	mov    esp, offset initial_stack_top  ; get protected mode stack
+
+	;
+	;   initialize the processor IDT Tables
+	;   init the IDT Table from the handler table
+	;
+
+	mov	esi, offset HandlerTable
+	mov	edi, offset ProcessorIDT0
+	mov	ecx, SystemIDTEntryNumber
+
+IDTLoop0:
+	movsw
+	add	edi, 4
+	movsw
+	loop	IDTLoop0
+
+	xor    ebx, ebx
+	mov    edx, TSSDefaultSegmentIndex
+	mov    esi, offset TSSDefaultDescriptors   ;  default processor
+	mov    edi, offset TSSDefaultSegments      ;  TSS segments and descriptors
+
+InitializeNextDefaultTSSSegment:
+	mov    ProcessorSegmentTable[ebx * 4], edi
+	mov    ProcessorTaskIndex[ebx * 4], edx
+
+	mov    eax, edi                           ; put the actual address of the TSS
+	mov    [esi].TSSBase1, ax                 ; segment into the TSS descriptor
+	shr    eax, 16                            ; in the GDT
+	mov    [esi].TSSBase2, al
+	mov    [esi].TSSBase3, ah
+
+	mov    eax, offset initial_stack_top
+	mov    [edi].tESP0, eax                  ; initialize the fields
+	mov    [edi].tESP1, eax                  ; of the TSS
+	mov    [edi].tESP2, eax                  ;
+	mov    [edi].tESP, eax
+	mov    ax, 10h                           ; data selector 0010:00000000
+	mov    [edi].tSS0, ax
+	mov    [edi].tSS1, ax
+	mov    [edi].tSS2, ax
+	mov    [edi].tSS, ax
+	mov    [edi].tDS, ax
+	mov    [edi].tES, ax
+	mov    [edi].tFS, ax
+	mov    [edi].tGS, ax
+	mov    [edi].tEBP, 0
+	mov    [edi].tEBX, 0
+	mov    [edi].tEAX, 0
+	mov    [edi].tESI, 0
+	mov    [edi].tEDI, 0
+
+	mov    ax, 8h                            ; code selector 0008:00000000
+	mov    [edi].tCS, ax
+	mov    eax, offset loader_main
+	mov    [edi].tEIP, eax
+
+	;
+	;
+	;
+
+	xor    ebx, ebx
+	xor    ebp, ebp
+	mov    edx, TSSSegmentIndex
+	mov    esi, offset TSSDescriptors
+	mov    edi, offset TSSSegments
+	mov    ecx, EXCEPTION_ENTRIES ;  get number of segments
+
+InitializeNextExceptionTSSSegment:
+	mov    ExceptionSegmentTable[ebp * 4], edi
+	mov    ExceptionTaskIndex[ebp * 4], edx
+	mov    eax, edi
+	mov    [esi].TSSBase1, ax
+	shr    eax, 16
+	mov    [esi].TSSBase2, al
+	mov    [esi].TSSBase3, ah
+
+	cmp    ebx, 2
+	je     SetNMIStack
+
+	cmp    ebx, 8
+	je     SetDFStack
+
+	mov    eax, offset debug_stack_top
+	mov    [edi].tESP0, eax
+	jmp    debugStackSet
+
+SetNMIStack:
+	mov    eax, offset debug_NMIstack_top
+	mov    [edi].tESP0, eax
+	jmp    debugStackSet
+
+SetDFStack:
+	mov    eax, offset debug_DFstack_top
+	mov    [edi].tESP0, eax
+	jmp    debugStackSet
+
+debugStackSet:
+	mov    [edi].tESP1, eax
+	mov    [edi].tESP2, eax
+	mov    [edi].tESP, eax
+	mov    ax, 10h                           ; data selector 0010:00000000
+	mov    [edi].tSS0, ax
+	mov    [edi].tSS1, ax
+	mov    [edi].tSS2, ax
+	mov    [edi].tSS, ax
+	mov    [edi].tDS, ax
+	mov    [edi].tES, ax
+	mov    [edi].tFS, ax
+	mov    [edi].tGS, ax
+	mov    [edi].tEBP, 0
+	mov    [edi].tEBX, 0
+	mov    [edi].tEAX, 0
+	mov    [edi].tESI, 0
+	mov    [edi].tEDI, 0
+
+	mov    ax, 8h                            ; code selector 0008:00000000
+	mov    [edi].tCS, ax
+	mov    eax, HandlerTable[ebx * 4]      ; get exception entry point
+	mov    [edi].tEIP, eax
+
+	add    esi, SIZE TSSDescriptor
+	add    edi, SIZE TaskStateSegment
+
+	add    edx, 8h                           ; bump GDT offset
+	inc    ebx
+	inc    ebp
+	dec    ecx                               ; init next segment
+	or     ecx, ecx
+	jnz    InitializeNextExceptionTSSSegment
+
+	;
+	;
+	;
+
+	xor    edx, edx     ; zero Task Gate Selector
+	mov    esi, offset ProcessorIDT0
+	mov    ecx, EXCEPTION_ENTRIES
+
+patch_idt_tables0:
+	mov    [esi].TSSRes1, 0
+	mov    eax, ExceptionTaskIndex[edx * 4] ; task gate index
+	mov    [esi].TSSSelector, ax
+	mov    [esi].TSSRes2, 0
+	mov    [esi].TSSFlags, 10000101b
+	mov    [esi].TSSRes3, 0
+	add    esi, SIZE IDTDescriptor
+
+	inc    edx          ; bump Task Gate Selector
+	loop   patch_idt_tables0
+
+	lidt   ProcessorIDTTable0
+
+load_gdt:
+	;
+	;  create a relative 16-bit segment in the GDT Table
+	;
+
+	mov     ebx, DOSDataTable
+	mov     eax, [ebx].tJUMP16_SEGMENT
+	mov     ebx, offset pRealModeCode
+	mov     [ebx].Base1, ax
+	shr     eax, 16
+	mov     [ebx].Base2, al
+	mov     [ebx].Base3, ah
+
+	mov     ebx, DOSDataTable
+	mov     eax, [ebx].tJUMP16_SEGMENT
+	mov     ebx, offset pRealModeData
+	mov     [ebx].Base1, ax
+	shr     eax, 16
+	mov     [ebx].Base2, al
+	mov     [ebx].Base3, ah
+
+	mov     eax, offset StartOfRealModeSegment
+	mov     ebx, DOSDataTable
+	mov     [ebx].tREAL_INT_SEGMENT, eax
+	mov     ebx, offset pRealIntCode
+	mov     [ebx].Base1, ax
+	shr     eax, 16
+	mov     [ebx].Base2, al
+	mov     [ebx].Base3, ah
+
+	mov     eax, offset StartOfRealModeSegment
+	mov     ebx, DOSDataTable
+	mov     [ebx].tREAL_INT_SEGMENT, eax
+	mov     ebx, offset pRealIntData
+	mov     [ebx].Base1, ax
+	shr     eax, 16
+	mov     [ebx].Base2, al
+	mov     [ebx].Base3, ah
+
+	mov     eax, offset int86x_jump_16
+	sub     eax, offset StartOfRealModeSegment
+	mov     int86x_jump_label, eax
+
+	mov	eax, offset int86x_real_jump
+	xor	ebx, ebx
+	mov     ebx, eax
+	and     ebx, 0Fh
+	shr	eax, 4
+	shl     eax, 16
+	mov     ax, bx
+	mov     int86x_real_jump_label, eax
+
+	lgdt    SystemGDTTable    ;  load the new gdt
+
+	mov     ax, 10h           ;  reload selectors
+	mov     ss, ax
+	mov     ds, ax
+	mov     es, ax
+	mov     fs, ax
+	mov     gs, ax
+
+	; clear TSS busy bit and reload task register
+
+	mov     eax, ProcessorTaskIndex[0 * 4]
+	mov     esi, offset SystemGDTTable
+	mov     esi, dword ptr [esi + 2]
+	lea     ebx, [esi + eax]
+	mov     [ebx].TSSType, 10001001b    ; clear the busy bit
+	ltr     ax
+
+	pushfd
+	and      dword ptr [esp], NOT 4000h    ; clear nested task flag
+	popfd
+
+	mov     eax, DOSDataTable
+	push    eax
+	call    loader_main
+	add     esp, 4
+	jmp     ExitToDOS
+
+
+public ExitToDOS
+ExitToDOS:
+	mov    ebx, DOSDataTable
+	mov    eax, [ebx].tDOS_STACK_OFFSET
+	mov    esp, eax
+	mov    edx, [ebx].tDOS_DATA_SEGMENT  ; restore ds:
+	mov    eax, 20h
+	jmp    ds: [ebx].tDOS_EXIT
+
+	hlt
+
+   align 16
+public OSMain
+OSMain:
+	cli
+	mov     eax, [esp + 12]  ;  Code Segment in High Memory
+	mov     ecx, [esp + 8]  ;  PM Table
+	mov     ebx, [esp + 4]  ;  DOS Data Table
+	jmp     eax
+
+MANOSStartup  endp
+
+   align 16
+DivideError:
+DebuggerInt1:
+NMI:
+DebuggerInt3:
+Overflow:
+BoundsCheck:
+InvalidOpcode:
+NoCoprocessor:
+DoubleFault:
+Cops:
+TSSCheck:
+SegmentNotPresent:
+StackException:
+GeneralProtection:
+PageFault:
+InvalidInterrupt:
+CoProcessorError:
+AlignmentCheck:
+MachineCheck:
+   task_entry
+   jmp   ExitLoader
+
+   align 16
+
+HW0:
+HW1:
+HW2:
+HW3:
+HW4:
+HW5:
+HW6:
+HW7:
+   push  edx
+   push  eax
+
+   mov    edx, 20h
+   mov    eax, 20h
+   out    dx, al
+
+   pop   eax
+   pop   edx
+   iretd
+
+HW8:
+HW9:
+HW10:
+HW11:
+HW12:
+HW13:
+HW14:
+HW15:
+   push  edx
+   push  eax
+
+   mov    edx, 0A0h
+   mov    eax, 20h
+   out    dx, al
+
+   mov    edx, 20h
+   mov    eax, 20h
+   out    dx, al
+
+   pop   eax
+   pop   edx
+   iretd
+
+
+HW16:
+HW17:
+HW18:
+HW19:
+HW20:
+HW21:
+HW22:
+HW23:
+HW24:
+HW25:
+HW26:
+HW27:
+HW28:
+HW29:
+HW30:
+HW31:
+HW32:
+HW33:
+HW34:
+HW35:
+HW36:
+HW37:
+HW38:
+HW39:
+HW40:
+HW41:
+HW42:
+HW43:
+HW44:
+HW45:
+HW46:
+HW47:
+HW48:
+HW49:
+HW50:
+HW51:
+HW52:
+HW53:
+HW54:
+HW55:
+HW56:
+HW57:
+HW58:
+HW59:
+HW60:
+HW61:
+HW62:
+HW63:
+HW64:
+HW65:
+SpuriousVector:
+   iretd
+
+   align 16
+StartOfRealModeSegment   label  dword
+
+   align 16
+OldPic        db      0
+	      db      0
+	      db      0
+	      db      0
+
+   align 16
+OldIDT        dp      0
+
+   align 16
+OldGDT        dp      0
+
+
+   align 16
+public int86x
+int86x  proc
+	pushfd
+	cli
+	push    ebx
+	push    esi
+	push    edi
+	push    ebp
+
+	mov     eax, [esp + 24]         ; int #
+	lea     esi, int86x_label + 1
+	mov     byte ptr [esi], al
+
+	mov     esi, [esp + 28]
+	mov     edi, offset RealModeStackTop
+	lea     edi, [edi + 4]
+	mov     ecx, 9
+
+	rep     movsd
+
+	mov     ebx, DOSDataTable
+	mov     eax, offset RealModeStackTop
+	mov     ecx, [ebx].tMASK_8259_A
+	mov     word ptr [eax], cx
+	mov     ecx, [ebx].tMASK_8259_B
+	mov     word ptr [eax + 2], cx
+
+	in      al, 21h
+	mov     byte ptr OldPic, al;
+	in      al, 0A1h
+	mov     byte ptr OldPic + 1, al;
+
+	mov	saved_stack, esp
+	mov     esp, OFFSET SavePagingStackTop
+
+	mov     eax, CR0                ; save control registers and stack
+	push    eax
+	mov     eax, CR3
+	push    eax
+	mov     savedPaging, esp
+
+	;  disable paging
+
+	mov     eax, CR0
+	and     eax, not 80000000h
+	mov     CR0, eax
+	jmp     short Flush1CR0  ; short jump to clear prefetch, required
+				; if paging was enabled
+Flush1CR0:
+
+	sidt    OldIDT       ; save off current IDT/GDT
+	sgdt    OldGDT
+
+	mov     ebx, DOSDataTable
+	mov     ecx, [ebx].tDOS_IDT_TABLE
+	mov     edx, [ebx].tGDT_TABLE
+	mov     ebx, [ebx].tDOS_CR0
+
+	mov     ax, 40h
+	mov     ds, ax
+	mov     es, ax
+	mov     ss, ax
+	mov     fs, ax
+
+	db	0EAh
+	int86x_jump_label label	dword
+	dd	0
+	dw	38h
+
+int86x_jump_16:
+	mov     CR0, ebx
+
+	db	0EAh
+int86x_real_jump_label  label	dword
+	dd	0
+
+int86x_real_jump:
+	mov     ax, dx
+	xor     bx, bx
+	mov     bx, ax
+	and     bx, 0Fh
+	shr     ax, 4
+	mov     es, ax
+	AddrSize
+	lgdt	es: [ebx]   ; reload DOS GDT
+
+	mov     ax, cx
+	xor     bx, bx
+	mov     bx, ax
+	and     bx, 0Fh
+	shr     ax, 4
+	mov     es, ax
+	AddrSize
+	lidt	es: [ebx]   ; reload DOS IDT
+
+	OperSize
+	AddrSize
+	mov	eax, offset RealModeStackTop  ; load a DOS stack and env
+	xor	bx, bx
+	mov     bx, ax
+	and     bx, 0Fh
+	shr	ax, 4
+	mov	ss, ax
+	mov     esp, ebx
+
+	mov     al, 11h   ; set to edge triggered
+	out     20h, al
+	Synch
+
+	mov     al, 8h    ; MS-DOS Vector 08h
+	out     21h, al
+	Synch
+
+	mov     al, 4h
+	out     21h, al
+	Synch
+
+	mov     al, 1h
+	out     21h, al
+	Synch
+
+	pop     eax         ; PICA and PICB DOS settings are on the stack
+	out     21h, al
+	Synch
+
+	pop     eax
+	out     0A1h, al
+	Synch
+
+	mov     al, 0Ah    ;  IRR reads ISR
+	out     20h, al
+	Synch
+
+	mov     al, 0Ah    ;  IRR Reads ISR
+	out     0A0h, al
+	Synch
+
+	pop     ax           ; these opcodes in 16 bit mode are actually
+	pop     es           ; 32-bit pops and pushes both here and below
+	pop     ds
+	pop     bp
+	pop     di
+	pop     si
+	pop     dx
+	pop     cx
+	pop     bx
+	pop     ax
+	sti
+
+int86x_label:
+	int     0
+
+	push    ax       ; these opcodes are really 32-bit pushes in 16 bit
+	push    bx       ; mode
+	push    cx
+	push    dx
+	push    si
+	push    di
+	push    bp
+	push    ds
+	push    es
+	pushf
+
+	cli
+	OperSize
+	AddrSize
+	mov	eax, offset SystemGDTTable
+	xor	bx, bx
+	mov     bx, ax
+	and     bx, 0Fh
+	shr	ax, 4
+	mov	ds, ax
+
+	AddrSize
+	lgdt	ds: [ebx]
+
+	mov	eax, CR0
+	or	al, 1
+	mov	CR0, eax
+
+	jmp	short PMContinue
+
+PMContinue:
+
+	AddrSize
+	OperSize
+	db	0EAh
+	dd	PMSwitch
+	dw	8h
+
+PMSwitch:
+	mov	ax, 10h
+	mov	ds, ax
+	mov	es, ax
+	mov	fs, ax
+	mov	gs, ax
+	mov	ss, ax
+
+	lgdt    OldGDT   ; restore IDT/GDT
+	lidt    OldIDT
+
+	;  Move the default vector number for PIC0 to 28h
+	;
+	; ICW1 - 11h-> ICW1, LTIM=ignored, ADI=ignored, SNGL=cascade, ICW4 needed
+
+	mov     ebx, DOSDataTable
+	mov     eax, [ebx].tDOS_SYSTEM_BUS_TYPE
+	and     eax, PS2
+	jz      NotLevelPIC
+
+	mov     al, 19h   ; set to level triggered
+	out     20h, al
+	Synch
+
+	jmp     ICW2Next
+
+NotLevelPIC:
+	mov     al, 11h   ; set to edge triggered
+	out     20h, al
+	Synch
+
+ICW2Next:
+
+	mov     al, 28h    ; MANOS Vector 28h
+	out     21h, al
+	Synch
+
+	; MSDOS is Vector 8h
+	; ICW3 - 0000 0100 INT2 is cascaded
+
+	mov     al, 4h
+	out     21h, al
+	Synch
+
+	; ICW4 - 0000 0001: 8086/8088 mode
+
+	mov     al, 1h
+	out     21h, al
+	Synch
+
+	mov     al, byte ptr OldPic;
+	and     al, not 00000101b ; cascade/timer on
+	out     21h, al
+	Synch
+
+	mov     al, byte ptr OldPic + 1;
+	out     0A1h, al
+	Synch
+
+	mov     al, 0Ah    ;  IRR reads ISR
+	out     20h, al
+	Synch
+
+	mov     al, 0Ah    ;  IRR Reads ISR
+	out     0A0h, al
+	Synch
+
+	mov	esp, savedPaging
+	pop     eax
+	mov     CR3, eax
+	pop     eax
+	mov     CR0, eax
+	jmp     short FlushCR0  ; short jump to clear prefetch, required
+				; if paging was enabled
+FlushCR0:
+	mov	esp, saved_stack
+	mov     esi, offset RealModeStackTop
+	lea     esi, [esi + 4]
+	mov     edi, [esp + 32]    ; outregs
+	mov     ecx, 9
+
+	rep     movsd
+
+	;
+	;   We may have gotten an interrupt from the keyboard
+	;   in real mode, or during the switch between real and
+	;   protected mode.  If we did, then the keyboard will not
+	;   generate another interrupt unless we clear the level
+	;   sensitive latch by reading port 60h (Keyboard Data Port)
+	;   to reset the latch.
+	;
+
+	in      al, 64h        ; keyboard status port (64h)
+	test    al, 1          ; test for output buffer full (key in buffer)
+	jz      NoKeyInBuffer  ; no key -- jump
+
+	in      al, 60h        ; eat the key and remove it from the buffer
+			       ; reading port 60h (keyboard data port)
+			       ; clears the latch and allows the keyboard to generate
+			       ; another interrupt
+
+NoKeyInBuffer:
+	pop     ebp
+	pop     edi
+	pop     esi
+	pop     ebx
+	popfd
+	ret
+
+int86x  endp
+
+
+_TEXT ENDS
+
+END

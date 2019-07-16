@@ -1,0 +1,48 @@
+
+
+;***************************************************************************
+;
+;   Copyright (c) 1997, 1998 Timpanogas Research Group, Inc.  All Rights
+;                            Reserved.
+;
+;   This program is an unpublished work of TRG, Inc. and contains
+;   trade secrets and other proprietary information.  Unauthorized
+;   use, copying, disclosure, or distribution of this file without the
+;   consent of TRG, Inc. can subject the offender to severe criminal
+;   and/or civil penalities.
+;
+;
+;   AUTHOR   :  Jeff V. Merkey
+;   FILE     :  STUB.386
+;   DESCRIP  :  Real Mode MS-DOS Stub for MANOS v1.0
+;   DATE     :  October 24, 1997
+;
+;
+;***************************************************************************
+
+.486P         ; select the processor
+MODEL LARGE   ; assume we will go to 32-bit mode for C and C++ modules
+STACK 200h    ; reserve stack space as needed for application
+
+    ASSUME  cs:INITCODE, ds:INITCODE, es:nothing, fs:nothing, gs:nothing
+
+INITCODE SEGMENT PUBLIC READWRITE USE16
+
+Message    db  'This program must be run under Metropolitan Area Network Operating System', 13, 10, '$'
+
+   STARTUPCODE
+
+   mov   ax, cs
+   mov   ds, ax
+   mov   dx, offset Message
+   mov   ah, 9h
+   int   21h
+
+   mov    ah, 4Ch
+   xor    al, al
+   int    21h
+
+
+INITCODE ENDS
+
+END

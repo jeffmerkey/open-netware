@@ -1,0 +1,747 @@
+
+
+;***************************************************************************
+;
+;
+;   Copyright (c) 1997, 1998 Timpanogas Research Group, Inc.  All Rights
+;                            Reserved.
+;
+;   This program is an unpublished work of TRG, Inc. and contains
+;   trade secrets and other proprietary information.  Unauthorized
+;   use, copying, disclosure, or distribution of this file without the
+;   consent of TRG, Inc. can subject the offender to severe criminal
+;   and/or civil penalities.
+;
+;
+;   AUTHOR   :  Jeff V. Merkey
+;   FILE     :  OPTKERN.386
+;   DESCRIP  :  32-bit Optimized IA32 Kernel for MANOS v1.0
+;   DATE     :  April 24, 1998
+;
+;
+;  The organization may seem strange for the main idle loop, but its
+;  structure maximizes performance by avoiding branches, AGIs, and memory
+;  writes while idle.  This keeps the pipelines filled during fall through
+;  cases, and effectively keeps the processors off the bus while they are
+;  idle.
+;
+;  This code has been highly optimized for IA32 386/486/P5/P6/PII
+;  processors.
+;
+;
+;***************************************************************************
+
+.486P         ; select the processor
+model flat
+
+OPT_IA32_MANOS     EQU    1
+
+include version.inc
+include hal.inc
+include kernel.inc
+
+	CGROUP GROUP  _TEXT
+	DGROUP GROUP  _DATA
+	ASSUME  cs:_TEXT, ds:_DATA, es:_DATA, fs:_DATA
+
+_DATA SEGMENT PUBLIC USE32 'DATA'
+
+if (OPT_IA32_MANOS)
+
+public LWPName
+LWPName      db    255 dup (0)
+
+endif
+
+_DATA ENDS
+
+
+_TEXT SEGMENT PUBLIC USE32 'CODE'
+
+    ASSUME  cs:_TEXT, ds:_DATA, es:_DATA, fs:_DATA
+
+if (OPT_IA32_MANOS)
+
+      extrn  thread_switch: near
+      extrn  processor_exit: near
+      extrn  MakeLWPThread: near
+      extrn  EnterDebugger: near
+
+      extrn  process_soft_ints: near
+      extrn  process_local_soft_ints: near
+      extrn  process_fast_lwp: near
+      extrn  process_local_fast_lwp: near
+      extrn  process_bind_queue: near
+      extrn  process_lwp_bind_queue: near
+      extrn  process_dispatch_queue: near
+      extrn  process_rundown_queue: near
+
+      extrn  processor_table: dword
+      extrn  processorSet: dword
+      extrn  soft_int_head: dword
+      extrn  fast_lwp_head: dword
+      extrn  lwp_dispatch_queue_head: dword
+      extrn  dispatch_queue_head: dword
+      extrn  rundown_queue_head: dword
+
+
+;**************************************************************************
+;
+;  idle assumes the following registers always contain these values.
+;  Any function called from the kernel must preserve or reload these
+;  registers if they are modified.
+;
+;  EDI -> HAL *
+;  ESI -> PROCESSOR_SET *
+;  EBX -> PROCESSOR #
+;  EBP -> JUMP TO SYSTEM_IDLE
+;
+;**************************************************************************
+
+   align 16
+public change_context
+change_context:
+
+       call   thread_switch
+
+       jmp   system_idle
+
+
+   align 16
+public balance_system
+balance_system:
+
+       extrn  averageActiveCount: dword
+
+       mov   eax, [esi].local_queue_count
+       cmp   eax, averageActiveCount
+       jg    change_context
+
+       cmp   [esi].local_queue_head, 0
+       jnz   change_context
+
+       jmp   system_idle
+
+
+   align 16
+public lwp_dispatch_change_context
+lwp_dispatch_change_context:
+
+       call   thread_switch
+
+       cmp    [esi].eligibleCount, 0
+       jnz    balance_system
+
+       cmp    [esi].local_queue_head, 0
+       jnz    change_context
+
+       jmp   system_idle
+
+
+   align 16
+public lwp_change_context
+lwp_change_context:
+
+       call   thread_switch
+
+       cmp    lwp_dispatch_queue_head, 0
+       jnz    lwp_dispatch_change_context
+
+       cmp    [esi].eligibleCount, 0
+       jnz    balance_system
+
+       cmp    [esi].local_queue_head, 0
+       jnz    change_context
+
+       jmp   system_idle
+
+
+   align 16
+public exec_process_fast_lwp_local
+exec_process_fast_lwp_local:
+
+       push  ebx
+       call  process_local_fast_lwp
+       add   esp, 4
+
+       cmp   [esi].lwp_queue_head, 0
+       jnz   lwp_change_context
+
+       cmp   lwp_dispatch_queue_head, 0
+       jnz   lwp_dispatch_change_context
+
+       cmp   [esi].eligibleCount, 0
+       jnz   balance_system
+
+       cmp   [esi].local_queue_head, 0
+       jnz   change_context
+
+       jmp   system_idle
+
+   align 16
+public exec_process_fast_lwp
+exec_process_fast_lwp:
+
+       push   ebx
+       call   process_fast_lwp
+       add    esp, 4
+
+       cmp   [esi].lfast_lwp_head, 0
+       jnz   exec_process_fast_lwp_local
+
+       cmp   [esi].lwp_queue_head, 0
+       jnz   lwp_change_context
+
+       cmp   lwp_dispatch_queue_head, 0
+       jnz   lwp_dispatch_change_context
+
+       cmp   [esi].eligibleCount, 0
+       jnz   balance_system
+
+       cmp   [esi].local_queue_head, 0
+       jnz   change_context
+
+       jmp   system_idle
+
+   align 16
+public exec_process_soft_int_local
+exec_process_soft_int_local:
+
+       call  process_local_soft_ints
+
+       cmp   fast_lwp_head, 0
+       jnz   exec_process_fast_lwp
+
+       cmp   [esi].lfast_lwp_head, 0
+       jnz   exec_process_fast_lwp_local
+
+       cmp   [esi].lwp_queue_head, 0
+       jnz   lwp_change_context
+
+       cmp   lwp_dispatch_queue_head, 0
+       jnz   lwp_dispatch_change_context
+
+       cmp   [esi].eligibleCount, 0
+       jnz   balance_system
+
+       cmp   [esi].local_queue_head, 0
+       jnz   change_context
+
+       jmp   system_idle
+
+   align 16
+public exec_process_soft_int
+exec_process_soft_int:
+
+       call   process_soft_ints
+
+       cmp   [esi].lsoft_int_head, 0
+       jnz   exec_process_soft_int_local
+
+       cmp   fast_lwp_head, 0
+       jnz   exec_process_fast_lwp
+
+       cmp   [esi].lfast_lwp_head, 0
+       jnz   exec_process_fast_lwp_local
+
+       cmp   [esi].lwp_queue_head, 0
+       jnz   lwp_change_context
+
+       cmp   lwp_dispatch_queue_head, 0
+       jnz   lwp_dispatch_change_context
+
+       cmp   [esi].eligibleCount, 0
+       jnz   balance_system
+
+       cmp   [esi].local_queue_head, 0
+       jnz   change_context
+
+       jmp   system_idle
+
+   align 16
+public exec_process_get_dispatch
+exec_process_get_dispatch:
+
+       push  ebx
+       call  process_dispatch_queue
+       add   esp, 4
+
+       cmp   soft_int_head, 0
+       jnz   exec_process_soft_int
+
+       cmp   [esi].lsoft_int_head, 0
+       jnz   exec_process_soft_int_local
+
+       cmp   fast_lwp_head, 0
+       jnz   exec_process_fast_lwp
+
+       cmp   [esi].lfast_lwp_head, 0
+       jnz   exec_process_fast_lwp_local
+
+       cmp   [esi].lwp_queue_head, 0
+       jnz   lwp_change_context
+
+       cmp   lwp_dispatch_queue_head, 0
+       jnz   lwp_dispatch_change_context
+
+       cmp   [esi].eligibleCount, 0
+       jnz   balance_system
+
+       cmp   [esi].local_queue_head, 0
+       jnz   change_context
+
+       jmp   system_idle
+
+
+   align 16
+public exec_process_bind_queue
+exec_process_bind_queue:
+
+       push  ebx
+       call  process_bind_queue
+       add   esp, 4
+
+       cmp   dispatch_queue_head, 0
+       jnz   exec_process_get_dispatch
+
+       cmp   soft_int_head, 0
+       jnz   exec_process_soft_int
+
+       cmp   [esi].lsoft_int_head, 0
+       jnz   exec_process_soft_int_local
+
+       cmp   fast_lwp_head, 0
+       jnz   exec_process_fast_lwp
+
+       cmp   [esi].lfast_lwp_head, 0
+       jnz   exec_process_fast_lwp_local
+
+       cmp   [esi].lwp_queue_head, 0
+       jnz   lwp_change_context
+
+       cmp   lwp_dispatch_queue_head, 0
+       jnz   lwp_dispatch_change_context
+
+       cmp   [esi].eligibleCount, 0
+       jnz   balance_system
+
+       cmp   [esi].local_queue_head, 0
+       jnz   change_context
+
+       jmp   system_idle
+
+
+   align 16
+public exec_process_rundown
+exec_process_rundown:
+
+       call  process_rundown_queue
+
+       cmp   [esi].bind_queue_head, 0
+       jnz   exec_process_bind_queue
+
+       cmp   dispatch_queue_head, 0
+       jnz   exec_process_get_dispatch
+
+       cmp   soft_int_head, 0
+       jnz   exec_process_soft_int
+
+       cmp   [esi].lsoft_int_head, 0
+       jnz   exec_process_soft_int_local
+
+       cmp   fast_lwp_head, 0
+       jnz   exec_process_fast_lwp
+
+       cmp   [esi].lfast_lwp_head, 0
+       jnz   exec_process_fast_lwp_local
+
+       cmp   [esi].lwp_queue_head, 0
+       jnz   lwp_change_context
+
+       cmp   lwp_dispatch_queue_head, 0
+       jnz   lwp_dispatch_change_context
+
+       cmp   [esi].eligibleCount, 0
+       jnz   balance_system
+
+       cmp   [esi].local_queue_head, 0
+       jnz   change_context
+
+       jmp   system_idle
+
+
+   align 16
+public make_worker_thread
+make_worker_thread:
+
+       push  ebx
+       call  MakeLWPThread
+       add   esp, 4
+
+       cmp   rundown_queue_head, 0
+       jnz   exec_process_rundown
+
+       cmp   [esi].bind_queue_head, 0
+       jnz   exec_process_bind_queue
+
+       cmp   dispatch_queue_head, 0
+       jnz   exec_process_get_dispatch
+
+       cmp   soft_int_head, 0
+       jnz   exec_process_soft_int
+
+       cmp   [esi].lsoft_int_head, 0
+       jnz   exec_process_soft_int_local
+
+       cmp   fast_lwp_head, 0
+       jnz   exec_process_fast_lwp
+
+       cmp   [esi].lfast_lwp_head, 0
+       jnz   exec_process_fast_lwp_local
+
+       cmp   [esi].lwp_queue_head, 0
+       jnz   lwp_change_context
+
+       cmp   lwp_dispatch_queue_head, 0
+       jnz   lwp_dispatch_change_context
+
+       cmp   [esi].eligibleCount, 0
+       jnz   balance_system
+
+       cmp   [esi].local_queue_head, 0
+       jnz   change_context
+
+       jmp   system_idle
+
+
+   align 16
+public test_worker_empty
+test_worker_empty:
+
+       cmp   [esi].lwp_worker_queue_head, 0
+       jz    make_worker_thread
+
+       cmp   rundown_queue_head, 0
+       jnz   exec_process_rundown
+
+       cmp   [esi].bind_queue_head, 0
+       jnz   exec_process_bind_queue
+
+       cmp   dispatch_queue_head, 0
+       jnz   exec_process_get_dispatch
+
+       cmp   soft_int_head, 0
+       jnz   exec_process_soft_int
+
+       cmp   [esi].lsoft_int_head, 0
+       jnz   exec_process_soft_int_local
+
+       cmp   fast_lwp_head, 0
+       jnz   exec_process_fast_lwp
+
+       cmp   [esi].lfast_lwp_head, 0
+       jnz   exec_process_fast_lwp_local
+
+       cmp   [esi].lwp_queue_head, 0
+       jnz   lwp_change_context
+
+       cmp   lwp_dispatch_queue_head, 0
+       jnz   lwp_dispatch_change_context
+
+       cmp   [esi].eligibleCount, 0
+       jnz   balance_system
+
+       cmp   [esi].local_queue_head, 0
+       jnz   change_context
+
+       jmp   system_idle
+
+   align 16
+public exec_lwp_bind_queue_head
+exec_lwp_bind_queue_head:
+
+       push  ebx
+       call  process_lwp_bind_queue
+       add   esp, 4
+
+       cmp   soft_int_head, 0
+       jnz   test_worker_empty
+
+       cmp   fast_lwp_head, 0
+       jnz   test_worker_empty
+
+       cmp   [esi].lsoft_int_head, 0
+       jnz   test_worker_empty
+
+       cmp   [esi].lfast_lwp_head, 0
+       jnz   test_worker_empty
+
+       cmp   [esi].lwp_queue_head, 0
+       jnz   test_worker_empty
+
+       cmp   lwp_dispatch_queue_head, 0
+       jnz   test_worker_empty
+
+       cmp   rundown_queue_head, 0
+       jnz   exec_process_rundown
+
+       cmp   [esi].bind_queue_head, 0
+       jnz   exec_process_bind_queue
+
+       cmp   dispatch_queue_head, 0
+       jnz   exec_process_get_dispatch
+
+       cmp   soft_int_head, 0
+       jnz   exec_process_soft_int
+
+       cmp   [esi].lsoft_int_head, 0
+       jnz   exec_process_soft_int_local
+
+       cmp   fast_lwp_head, 0
+       jnz   exec_process_fast_lwp
+
+       cmp   [esi].lfast_lwp_head, 0
+       jnz   exec_process_fast_lwp_local
+
+       cmp   [esi].lwp_queue_head, 0
+       jnz   lwp_change_context
+
+       cmp   lwp_dispatch_queue_head, 0
+       jnz   lwp_dispatch_change_context
+
+       cmp   [esi].eligibleCount, 0
+       jnz   balance_system
+
+       cmp   [esi].local_queue_head, 0
+       jnz   change_context
+
+       jmp   system_idle
+
+
+
+   align 16
+public exec_debugger_signal
+exec_debugger_signal:
+
+       mov    [edi].DebugSignal, 0
+       call   EnterDebugger
+
+       cmp   [esi].lwp_bind_queue_head, 0
+       jnz   exec_lwp_bind_queue_head
+
+       cmp   soft_int_head, 0
+       jnz   test_worker_empty
+
+       cmp   fast_lwp_head, 0
+       jnz   test_worker_empty
+
+       cmp   [esi].lsoft_int_head, 0
+       jnz   test_worker_empty
+
+       cmp   [esi].lfast_lwp_head, 0
+       jnz   test_worker_empty
+
+       cmp   [esi].lwp_queue_head, 0
+       jnz   test_worker_empty
+
+       cmp   lwp_dispatch_queue_head, 0
+       jnz   test_worker_empty
+
+       cmp   rundown_queue_head, 0
+       jnz   exec_process_rundown
+
+       cmp   [esi].bind_queue_head, 0
+       jnz   exec_process_bind_queue
+
+       cmp   dispatch_queue_head, 0
+       jnz   exec_process_get_dispatch
+
+       cmp   soft_int_head, 0
+       jnz   exec_process_soft_int
+
+       cmp   [esi].lsoft_int_head, 0
+       jnz   exec_process_soft_int_local
+
+       cmp   fast_lwp_head, 0
+       jnz   exec_process_fast_lwp
+
+       cmp   [esi].lfast_lwp_head, 0
+       jnz   exec_process_fast_lwp_local
+
+       cmp   [esi].lwp_queue_head, 0
+       jnz   lwp_change_context
+
+       cmp   lwp_dispatch_queue_head, 0
+       jnz   lwp_dispatch_change_context
+
+       cmp   [esi].eligibleCount, 0
+       jnz   balance_system
+
+       cmp   [esi].local_queue_head, 0
+       jnz   change_context
+
+       jmp   system_idle
+
+
+   align 16
+public exec_processor_exit
+exec_processor_exit:
+
+       push  ebx
+       call  processor_exit
+       add   esp, 4
+
+       cmp   [edi].DebugSignal, 0
+       jnz   exec_debugger_signal
+
+       cmp   [esi].lwp_bind_queue_head, 0
+       jnz   exec_lwp_bind_queue_head
+
+       cmp   soft_int_head, 0
+       jnz   test_worker_empty
+
+       cmp   fast_lwp_head, 0
+       jnz   test_worker_empty
+
+       cmp   [esi].lsoft_int_head, 0
+       jnz   test_worker_empty
+
+       cmp   [esi].lfast_lwp_head, 0
+       jnz   test_worker_empty
+
+       cmp   [esi].lwp_queue_head, 0
+       jnz   test_worker_empty
+
+       cmp   lwp_dispatch_queue_head, 0
+       jnz   test_worker_empty
+
+       cmp   rundown_queue_head, 0
+       jnz   exec_process_rundown
+
+       cmp   [esi].bind_queue_head, 0
+       jnz   exec_process_bind_queue
+
+       cmp   dispatch_queue_head, 0
+       jnz   exec_process_get_dispatch
+
+       cmp   soft_int_head, 0
+       jnz   exec_process_soft_int
+
+       cmp   [esi].lsoft_int_head, 0
+       jnz   exec_process_soft_int_local
+
+       cmp   fast_lwp_head, 0
+       jnz   exec_process_fast_lwp
+
+       cmp   [esi].lfast_lwp_head, 0
+       jnz   exec_process_fast_lwp_local
+
+       cmp   [esi].lwp_queue_head, 0
+       jnz   lwp_change_context
+
+       cmp   lwp_dispatch_queue_head, 0
+       jnz   lwp_dispatch_change_context
+
+       cmp   [esi].eligibleCount, 0
+       jnz   balance_system
+
+       cmp   [esi].local_queue_head, 0
+       jnz   change_context
+
+       jmp   system_idle
+
+
+   align 16
+public system_idle
+system_idle:
+
+       cmp   [edi].ShutdownSignal, 0
+       jnz   exec_processor_exit
+
+       cmp   [edi].DebugSignal, 0
+       jnz   exec_debugger_signal
+
+       cmp   [esi].lwp_bind_queue_head, 0
+       jnz   exec_lwp_bind_queue_head
+
+       cmp   soft_int_head, 0
+       jnz   test_worker_empty
+
+       cmp   fast_lwp_head, 0
+       jnz   test_worker_empty
+
+       cmp   [esi].lsoft_int_head, 0
+       jnz   test_worker_empty
+
+       cmp   [esi].lfast_lwp_head, 0
+       jnz   test_worker_empty
+
+       cmp   [esi].lwp_queue_head, 0
+       jnz   test_worker_empty
+
+       cmp   lwp_dispatch_queue_head, 0
+       jnz   test_worker_empty
+
+       cmp   rundown_queue_head, 0
+       jnz   exec_process_rundown
+
+       cmp   [esi].bind_queue_head, 0
+       jnz   exec_process_bind_queue
+
+       cmp   dispatch_queue_head, 0
+       jnz   exec_process_get_dispatch
+
+       cmp   soft_int_head, 0
+       jnz   exec_process_soft_int
+
+       cmp   [esi].lsoft_int_head, 0
+       jnz   exec_process_soft_int_local
+
+       cmp   fast_lwp_head, 0
+       jnz   exec_process_fast_lwp
+
+       cmp   [esi].lfast_lwp_head, 0
+       jnz   exec_process_fast_lwp_local
+
+       cmp   [esi].lwp_queue_head, 0
+       jnz   lwp_change_context
+
+       cmp   lwp_dispatch_queue_head, 0
+       jnz   lwp_dispatch_change_context
+
+       cmp   [esi].eligibleCount, 0
+       jnz   balance_system
+
+       cmp   [esi].local_queue_head, 0
+       jnz   change_context
+
+       jmp   system_idle
+
+   align 16
+public idle_loop
+idle_loop:
+
+       mov    ebx, dword ptr [esp + 4]
+       mov    esi, OFFSET processorSet
+       mov    eax, ebx
+       mov    ecx, SIZE PROCESSOR_QUEUE
+       mul    ecx
+       add    esi, eax
+
+       mov    edi, OFFSET processor_table
+       mov    eax, ebx
+       mov    ecx, SIZE HAL
+       mul    ecx
+       add    edi, eax
+
+       sti
+       jmp    system_idle
+
+
+endif
+
+_TEXT ENDS
+
+END
+
+

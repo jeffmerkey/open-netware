@@ -1,0 +1,284 @@
+
+
+;***************************************************************************
+;
+;   Copyright (c) 1997, 1998 Timpanogas Research Group, Inc.  All Rights
+;                            Reserved.
+;
+;   This program is an unpublished work of TRG, Inc. and contains
+;   trade secrets and other proprietary information.  Unauthorized
+;   use, copying, disclosure, or distribution of this file without the
+;   consent of TRG, Inc. can subject the offender to severe criminal
+;   and/or civil penalities.
+;
+;
+;   AUTHOR   :  Jeff V. Merkey
+;   FILE     :  KEYBRST.386
+;   DESCRIP  :  Loader Keyboard Reset Code for MANOS v1.0
+;   DATE     :  August 27, 1998
+;
+;***************************************************************************
+
+.486P         ; select the processor
+model flat
+
+include hal.inc
+
+	CGROUP GROUP  _TEXT
+	DGROUP GROUP  _DATA
+	ASSUME  cs:_TEXT, ds:_DATA, es:_DATA, fs:_DATA
+
+_DATA SEGMENT DWORD PUBLIC USE32 'DATA'
+
+;************************************************************************
+;
+;  The following equates are for the hardware handling code.
+;  8042 Status Byte, Port Hex 0064 Read
+;
+;************************************************************************
+
+STATUSPORT		EQU 64h
+COMMANDPORT		EQU 64h
+DATAPORT		EQU 60h
+
+PARITYERROR		EQU 10000000b
+GENERALTIMEOUT		EQU 01000000b
+AUXOUTBUFFFULL		EQU 00100000b
+INHIBITSWITCH		EQU 00010000b
+COMMANDDATA		EQU 00001000b
+SYSTEMFLAG		EQU 00000100b
+INPUTBUFFFULL		EQU 00000010b
+OUTPUTBUFFFULL		EQU 00000001b
+RESET_KEYBOARD		EQU 0FFh
+KEYBOARD_OVERRUN        EQU 0FFh
+BAT_COMPLETE		EQU 0AAh
+
+_DATA ENDS
+
+
+_TEXT SEGMENT DWORD PUBLIC USE32 'CODE'
+
+   ASSUME  cs:_TEXT, ds:_DATA, es:_DATA, fs:_DATA
+
+;************************************************************************
+;
+;   This sets the Keyboard Scan Set to #2 with 8042 interpretation ON
+;
+;************************************************************************
+
+   align 16
+public ResetKeyboard
+ResetKeyboard proc
+		pushad
+		pushfd
+		cli
+
+		in    al, 21h
+		or    al, 2
+		out   21h, al    ; mask IRQ 1
+
+		call  KeyboardDisable
+		mov   al, RESET_KEYBOARD
+		out   DATAPORT, al
+
+		mov   ecx, 200
+BATStatusLoop:
+		dec   ecx
+		jz    BATTimeOut
+
+		call  OutBuffFull
+
+		in    al, DATAPORT
+		cmp   al, BAT_COMPLETE
+		jne   BATStatusLoop
+BATTimeOut:
+		call  KeyboardEnable
+
+		mov   edi, 417h   ; BIOS Keyboard Data Area is Reset
+		xor   eax, eax    ; zero control flags
+		stosb             ; keyboard control and state flags
+		stosb             ; are at 40:17h thru 40:19h
+		stosb             ; zero flags
+
+		;
+		;  keyboard head/tail are at 40:1Ah (head) and
+		;  40:1Ch (tail).  reset pointers
+		;
+		lea   esi, [edi + 2]    ; get head in eax and write
+		lodsw                   ; to tail pointer
+		stosw
+
+		call  InBuffEmpty    ; Wait for Input Buffer to Empty
+		mov   al, 0FAh	     ; Set ALL keys typematic/make/break
+		out   DATAPORT, al   ; Send Command to KBD (not 8042)
+
+		call  OutBuffFull    ; Eat response
+		in    al, DATAPORT
+
+		call  InBuffEmpty    ; Wait for Input Buffer to Empty
+		mov   al, 0F0h	     ; Set Scan code set
+		out   DATAPORT, al   ; Send Command to KBD (not 8042)
+
+		call  OutBuffFull    ; Eat response
+		in    al, DATAPORT
+
+		call  InBuffEmpty    ; Wait for Input Buffer to Empty
+		mov   al, 02h	     ; Scan set 2
+		out   DATAPORT, al   ; Send Command
+
+		call  OutBuffFull    ; Eat response
+		in    al, DATAPORT
+
+		call  InBuffEmpty     ; Wait for Input Buffer to Empty
+		mov   al, 060h	      ; Set up to write 8042 command byte
+		out   COMMANDPORT, al ; Send Command
+
+		call  InBuffEmpty     ; Wait for Input Buffer to Empty
+		mov   al, 45h	      ; Enable IBM Xlate
+		out   DATAPORT, al    ; Send Command
+
+		call  SetKeyboardLEDs
+
+		in    al, 21h
+		and   al, NOT 2
+		out   21h, al         ; unmask irq1
+
+		popfd
+		popad
+		ret
+
+ResetKeyboard endp
+
+
+;************************************************************************
+;
+;   This tells the 8042 Controller to Disable the Keyboard device.
+;
+;************************************************************************
+
+   align 16
+public KeyboardDisable
+KeyboardDisable proc
+
+		push   eax
+		call   InBuffEmpty	; Wait for Input Buffer to Empty
+		mov    al, 0ADh		; Set Command to "Write the 8042 Command Byte"
+		out    COMMANDPORT, al	; Send Command
+		call   InBuffEmpty	; Wait for Input Buffer to Empty
+		pop    eax
+		ret
+
+KeyboardDisable endp
+
+;************************************************************************
+;
+;   This tells the 8042 Controller to Enable the Keyboard Device.
+;
+;************************************************************************
+
+   align 16
+public KeyboardEnable
+KeyboardEnable  proc
+
+		call  InBuffEmpty	; Wait for Input Buffer to Empty
+		mov   al, 0AEh		; Set Command to "Write the 8042 Command Byte"
+		out   COMMANDPORT, al	; Send Command
+		call  InBuffEmpty	; Wait for Input Buffer to Empty
+		ret
+
+KeyboardEnable  endp
+
+;************************************************************************
+;
+;  Waits until the 8042 Input Buffer is EMPTY
+;
+;************************************************************************
+
+   align 16
+public InBuffEmpty
+InBuffEmpty proc
+
+		push    eax
+		push    ecx
+		mov     ecx, 2FFFFh 			;check 128k times
+IBE:
+		jmp     IBE1
+IBE1:
+		jmp     IBE2
+IBE2:
+		in      al, STATUSPORT		;Read Status Byte into AL
+		test    al, INPUTBUFFFULL	;Test The Input Buffer Full Bit
+		loopnz  IBE
+		pop     ecx
+		pop     eax
+		ret
+
+InBuffEmpty endp
+
+;************************************************************************
+;
+;  Waits until the 8042 Output Buffer is FULL so we can read it
+;
+;  Before calling this makes sure that the Keyboard interrupts have been
+;  masked so the keyboard interrupt doesn't eat the byte you're
+;  looking for!!
+;
+;************************************************************************
+
+   align 16
+public OutBuffFull
+OutBuffFull proc
+
+		push    eax
+		push    ecx
+		mov     ecx, 2FFFFh 			;check 128k times
+OBF:
+		jmp     OBF1
+OBF1:
+		jmp     OBF2
+OBF2:
+		in      al, STATUSPORT	        ;Read Status Byte into AL
+		test    al, OUTPUTBUFFFULL	;Test The Output Buffer Full Bit
+		loopz   OBF
+		pop     ecx
+		pop     eax
+		ret
+
+OutBuffFull endp
+
+;************************************************************************
+;
+;  This sets the indicators on the keyboard based on data in KbdState
+;
+;************************************************************************
+
+   align 16
+public SetKeyboardLEDs
+SetKeyboardLEDs proc
+
+		push  eax
+
+		call  InBuffEmpty	; Wait for Input Buffer to Empty
+		mov   al, 0EDh		; Set/Reset Status Indicators
+		out   DATAPORT, al 	; Send KBD Command
+
+		call  OutBuffFull	; Eat response
+		in    al, DATAPORT
+
+		call  InBuffEmpty	; Wait for Input Buffer to Empty
+		mov   al, 0      	; Get Current Lock Status Byte
+		and   al, 00000111b	; Mask all but low order 3 bits
+		out   DATAPORT, al	; Send KBD Command
+
+		call  OutBuffFull	; Eat response
+		in    al, DATAPORT
+
+		pop   eax
+		ret
+
+SetKeyboardLEDs endp
+
+
+_TEXT ENDS
+
+END

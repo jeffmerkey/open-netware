@@ -1,0 +1,143 @@
+
+;***************************************************************************
+;
+;   Copyright (c) 1997, 1998 Timpanogas Research Group, Inc.  All Rights
+;                            Reserved.
+;
+;   This program is an unpublished work of TRG, Inc. and contains
+;   trade secrets and other proprietary information.  Unauthorized
+;   use, copying, disclosure, or distribution of this file without the
+;   consent of TRG, Inc. can subject the offender to severe criminal
+;   and/or civil penalities.
+;
+;
+;   AUTHOR   :  Jeff V. Merkey
+;   FILE     :  C0NT.386
+;   DESCRIP  :  PE Loader 32-bit Init Stub for MANOS v1.0
+;   DATE     :  December 6, 1997
+;
+;
+;***************************************************************************
+
+WINDOWS   EQU     1
+
+; C0NT.ASM - C run time library entry point for NT
+
+.486P
+model flat
+		ASSUME   CS: FLAT, DS: FLAT, SS: FLAT, ES: FLAT
+
+BSSINIT         equ     1       ; Fix for problem with OS not initializing
+                                ;  the first page of BSS to zero
+FULLBSS         equ     1       ; Fix for problem with OS not initializing
+                                ;  the entire BSS to zero
+
+;----------------------------------------------------------------------
+; Code segment
+
+_TEXT           SEGMENT PUBLIC USE32 'CODE'
+_TEXT           ENDS
+
+;----------------------------------------------------------------------
+; Data segments
+
+_DATA           SEGMENT PUBLIC DWORD USE32 PUBLIC 'DATA'
+		db  'Copyright (C) 1997 Timpanogas Research Group, Inc.',0
+_DATA           ENDS
+
+_TLSCBA         SEGMENT PUBLIC DWORD USE32 PUBLIC 'TLSCBA'
+_TLSCBA         ENDS
+
+_INIT_          SEGMENT PUBLIC WORD USE32 PUBLIC 'INITDATA'
+InitStart       label byte
+_INIT_          ENDS
+
+_INITEND_       SEGMENT PUBLIC WORD USE32 PUBLIC 'INITDATA'
+InitEnd         label byte
+_INITEND_       ENDS
+
+_EXIT_          SEGMENT PUBLIC WORD USE32 PUBLIC 'EXITDATA'
+ExitStart       label byte
+_EXIT_          ENDS
+
+_EXITEND_       SEGMENT PUBLIC WORD USE32 PUBLIC 'EXITDATA'
+ExitEnd         label byte
+_EXITEND_       ENDS
+
+ifndef MASM
+                NOWARN  RES
+endif
+CONST           SEGMENT PUBLIC DWORD USE32 PUBLIC 'CONST'
+CONST           ENDS
+ifndef MASM
+                WARN    RES
+endif
+
+_BSS            SEGMENT PUBLIC DWORD USE32 PUBLIC 'BSS'
+IFDEF   BSSINIT
+bdata@          label   byte
+ENDIF
+_BSS            ENDS
+
+IFDEF   BSSINIT
+_BSSEND         SEGMENT PUBLIC DWORD USE32 PUBLIC 'BSS'
+edata@          label   byte
+_BSSEND         ENDS
+ENDIF
+
+IFDEF   BSSINIT
+DGROUP          GROUP _DATA, _TLSCBA, _INIT_, _INITEND_, _EXIT_, _EXITEND_, CONST, _BSS, _BSSEND
+ELSE
+DGROUP          GROUP _DATA, _TLSCBA, _INIT_, _INITEND_, _EXIT_, _EXITEND_, CONST, _BSS
+ENDIF
+
+;----------------------------------------------------------------------
+; External function definitions
+
+_TEXT           SEGMENT PUBLIC USE32 'CODE'
+
+EXTRN           MANOSStartup: NEAR
+
+_TEXT           ENDS
+
+;----------------------------------------------------------------------
+; External data definitions
+
+_DATA           SEGMENT PUBLIC DWORD USE32 'DATA'
+_DATA           ENDS
+
+;----------------------------------------------------------------------
+; CV4 debugging information: a pointer to main, WinMain, or DllEntryPoint
+
+ifndef MASM ; MASM386 can't handle 'dp' directive
+
+$$BSYMS         SEGMENT PUBLIC BYTE USE32 'DEBSYM'
+		dd  2       ; magic
+		dw  8       ; magic
+		dw  210h    ; magic (S_ENTRY32)
+
+		dp  MANOSStartup
+
+$$BSYMS ENDS
+
+endif   ; ndef MASM
+
+_DATA           SEGMENT PUBLIC DWORD USE32 'DATA'
+_DATA           ENDS
+
+;----------------------------------------------------------------------
+; Startup code
+
+_TEXT           SEGMENT DWORD PUBLIC USE32 'CODE'
+
+		public __acrtused
+   align 4
+__acrtused      PROC NEAR
+		jmp     MANOSStartup
+
+__acrtused      ENDP
+
+
+_TEXT           ENDS
+
+END     __acrtused

@@ -1,0 +1,234 @@
+#UPDATE#
+CINIT.obj:	stdarg.h stdio.h stdlib.h ctype.h string.h types.h kernel.h \
+		version.h keyboard.h screen.h emit.h dos.h tss.h os.h mps.h \
+		hal.h peexe.h window.h timer.h line.h dosfile.h loader.h \
+		event.h bus.h start.h
+KERNEL.obj:	stdarg.h stdio.h stdlib.h ctype.h string.h types.h \
+		kernel.h version.h keyboard.h screen.h emit.h dos.h tss.h \
+		os.h mps.h hal.h timer.h peexe.h extrnvar.h line.h loader.h \
+		malloc.h free.h dosfile.h ifs.h event.h
+SCREEN.obj:	stdarg.h stdio.h stdlib.h ctype.h string.h types.h \
+		kernel.h version.h keyboard.h screen.h os.h emit.h malloc.h \
+		free.h dos.h dosfile.h event.h
+EXPRESS.obj:	stdarg.h stdio.h stdlib.h ctype.h string.h types.h \
+		kernel.h version.h keyboard.h screen.h dos.h tss.h
+DEBUG.obj:	stdarg.h stdio.h stdlib.h ctype.h string.h types.h kernel.h \
+		version.h keyboard.h screen.h emit.h os.h dos.h tss.h mps.h \
+		hal.h xcall.h window.h line.h loader.h menu.h rlock.h event.h \
+		debug.h dparse.h bus.h ia32.h debcmd.h debkern.h sld.h
+UNASM.obj:	stdarg.h stdio.h stdlib.h ctype.h string.h types.h kernel.h \
+		version.h keyboard.h screen.h emit.h os.h dos.h tss.h mps.h \
+		hal.h xcall.h window.h line.h loader.h menu.h rlock.h event.h \
+		debug.h dparse.h bus.h ia32.h debcmd.h
+FORMAT.obj:	stdarg.h stdio.h stdlib.h ctype.h kernel.h types.h \
+		version.h keyboard.h screen.h
+MPS.obj:	stdarg.h stdio.h stdlib.h ctype.h string.h types.h kernel.h \
+		version.h keyboard.h screen.h os.h emit.h mps.h event.h
+INT.obj:	stdarg.h stdio.h stdlib.h ctype.h string.h types.h keyboard.h \
+		kernel.h version.h hal.h screen.h mps.h emit.h os.h
+MEM.obj:	stdarg.h stdio.h stdlib.h ctype.h string.h types.h kernel.h \
+		version.h keyboard.h screen.h emit.h dos.h tss.h mps.h os.h \
+		globals.h index.h mmu.h book.h chapter.h page.h byte.h mpt.h \
+		mah.h mat.h malloc.h
+MPT.obj:	stdarg.h stdio.h stdlib.h emit.h os.h types.h kernel.h \
+		version.h globals.h index.h mmu.h book.h chapter.h page.h \
+		byte.h mpt.h mah.h mat.h malloc.h
+MAH.obj:	stdarg.h stdio.h stdlib.h emit.h os.h types.h kernel.h \
+		version.h globals.h index.h mmu.h book.h chapter.h page.h \
+		byte.h mpt.h mah.h mat.h malloc.h
+MAT.obj:	stdarg.h stdio.h stdlib.h emit.h os.h types.h kernel.h \
+		version.h globals.h index.h mmu.h book.h chapter.h page.h \
+		byte.h mpt.h mah.h mat.h malloc.h
+CHAPTER.obj:	stdarg.h stdio.h stdlib.h emit.h os.h types.h kernel.h \
+		version.h globals.h index.h mmu.h book.h chapter.h page.h \
+		byte.h mpt.h mah.h mat.h malloc.h
+PAGE.obj:	stdarg.h stdio.h stdlib.h emit.h os.h types.h kernel.h \
+		version.h globals.h index.h mmu.h book.h chapter.h page.h \
+		byte.h mpt.h mah.h mat.h malloc.h
+INDEX.obj:	stdarg.h stdio.h stdlib.h emit.h os.h types.h kernel.h \
+		version.h globals.h index.h mmu.h book.h chapter.h page.h \
+		byte.h mpt.h mah.h mat.h malloc.h
+MALLOC.obj:	stdarg.h stdio.h stdlib.h emit.h os.h types.h kernel.h \
+		version.h globals.h index.h mmu.h book.h chapter.h page.h \
+		byte.h mpt.h mah.h mat.h malloc.h
+BYTE.obj:	stdarg.h stdio.h stdlib.h emit.h os.h types.h kernel.h \
+		version.h globals.h index.h mmu.h book.h chapter.h page.h \
+		byte.h mpt.h mah.h mat.h malloc.h
+RANDOM.obj:	stdarg.h stdio.h stdlib.h emit.h os.h types.h globals.h \
+		index.h mmu.h book.h chapter.h page.h byte.h mpt.h mah.h \
+		mat.h malloc.h
+HAL.obj:	stdarg.h stdio.h stdlib.h ctype.h string.h types.h kernel.h \
+		version.h keyboard.h screen.h hal.h mps.h emit.h os.h
+PROC.obj:	stdarg.h stdio.h stdlib.h ctype.h string.h types.h \
+		keyboard.h kernel.h version.h hal.h screen.h mps.h emit.h \
+		os.h event.h dos.h
+PROCESS.obj:	stdarg.h stdio.h stdlib.h ctype.h string.h types.h \
+		kernel.h version.h keyboard.h screen.h emit.h dos.h tss.h \
+		os.h mps.h hal.h timer.h peexe.h malloc.h free.h event.h
+COMMAND.obj:	stdarg.h stdio.h stdlib.h ctype.h string.h types.h \
+		kernel.h version.h keyboard.h screen.h emit.h dos.h tss.h \
+		os.h mps.h hal.h window.h dosfile.h timer.h line.h loader.h \
+		cmd.h xcall.h
+DOSFILE.obj:	stdarg.h stdio.h stdlib.h ctype.h string.h types.h \
+		kernel.h version.h keyboard.h screen.h emit.h dos.h tss.h \
+		os.h mps.h hal.h peexe.h window.h dosfile.h event.h
+CTIMER.obj:	stdarg.h stdio.h stdlib.h ctype.h string.h types.h \
+		kernel.h version.h keyboard.h screen.h emit.h dos.h tss.h \
+		os.h mps.h hal.h peexe.h timer.h
+SEMA.obj:	stdarg.h stdio.h stdlib.h ctype.h string.h types.h kernel.h \
+		version.h keyboard.h screen.h emit.h dos.h tss.h os.h mps.h \
+		hal.h timer.h peexe.h malloc.h free.h event.h
+MMU.obj:	stdarg.h stdio.h stdlib.h ctype.h string.h types.h kernel.h \
+		version.h keyboard.h screen.h emit.h dos.h tss.h os.h mps.h \
+		hal.h peexe.h window.h timer.h globals.h index.h mmu.h book.h \
+		chapter.h page.h byte.h mpt.h mah.h mat.h malloc.h
+CODEVIEW.obj:	stdarg.h stdio.h stdlib.h ctype.h string.h types.h \
+		kernel.h version.h keyboard.h screen.h emit.h dos.h tss.h \
+		os.h mps.h hal.h timer.h dosfile.h peexe.h line.h loader.h \
+		malloc.h free.h trees.h symbols.h exports.h codeview.h
+LOADER.obj:	stdarg.h stdio.h stdlib.h ctype.h string.h types.h \
+		kernel.h version.h keyboard.h screen.h emit.h dos.h tss.h \
+		os.h mps.h hal.h timer.h peexe.h extrnvar.h line.h loader.h \
+		malloc.h free.h dosfile.h ifs.h event.h exports.h
+PEDUMP.obj:	stdarg.h stdio.h stdlib.h ctype.h string.h types.h \
+		kernel.h version.h keyboard.h screen.h emit.h dos.h tss.h \
+		os.h mps.h hal.h timer.h peexe.h extrnvar.h dosfile.h ifs.h
+EXEDUMP.obj:	stdarg.h stdio.h stdlib.h ctype.h string.h types.h \
+		kernel.h version.h keyboard.h screen.h emit.h dos.h tss.h \
+		os.h mps.h hal.h timer.h peexe.h extrnvar.h
+OBJDUMP.obj:	stdarg.h stdio.h stdlib.h ctype.h string.h types.h \
+		kernel.h version.h keyboard.h screen.h emit.h dos.h tss.h \
+		os.h mps.h hal.h timer.h peexe.h extrnvar.h
+COMMON.obj:	stdarg.h stdio.h stdlib.h ctype.h string.h types.h \
+		kernel.h version.h keyboard.h screen.h emit.h dos.h tss.h \
+		os.h mps.h hal.h timer.h peexe.h extrnvar.h
+PEUTIL.obj:	stdarg.h stdio.h stdlib.h ctype.h string.h types.h \
+		kernel.h version.h keyboard.h screen.h emit.h dos.h tss.h \
+		os.h mps.h hal.h timer.h peexe.h extrnvar.h
+WINDOW.obj:	stdarg.h stdio.h stdlib.h ctype.h string.h types.h \
+		kernel.h version.h keyboard.h screen.h emit.h dos.h tss.h \
+		os.h mps.h hal.h window.h malloc.h free.h
+MENU.obj:	stdarg.h stdio.h stdlib.h ctype.h string.h types.h kernel.h \
+		version.h keyboard.h screen.h emit.h dos.h tss.h os.h mps.h \
+		hal.h menu.h malloc.h free.h
+DLL.obj:	stdarg.h stdio.h stdlib.h ctype.h string.h types.h kernel.h \
+		version.h keyboard.h screen.h emit.h dos.h tss.h os.h mps.h \
+		hal.h timer.h dosfile.h peexe.h extrnvar.h line.h loader.h \
+		exports.h
+MONITOR.obj:	stdarg.h stdio.h stdlib.h ctype.h string.h types.h \
+		kernel.h version.h keyboard.h screen.h emit.h dos.h tss.h \
+		os.h mps.h hal.h window.h menu.h dosfile.h timer.h peexe.h \
+		line.h loader.h malloc.h free.h event.h
+LOWMEM.obj:	stdarg.h stdio.h stdlib.h ctype.h string.h types.h \
+		kernel.h version.h keyboard.h screen.h emit.h dos.h tss.h \
+		os.h mps.h hal.h timer.h peexe.h bus.h
+HIGHMEM.obj:	stdarg.h stdio.h stdlib.h ctype.h string.h types.h \
+		kernel.h version.h keyboard.h screen.h emit.h dos.h tss.h \
+		os.h mps.h hal.h timer.h peexe.h
+BUS.obj:	stdarg.h stdio.h stdlib.h ctype.h string.h types.h kernel.h \
+		version.h keyboard.h screen.h emit.h os.h dos.h tss.h mps.h \
+		hal.h xcall.h window.h line.h loader.h menu.h dosfile.h
+TREES.obj:	version.h stdarg.h stdio.h stdlib.h ctype.h string.h \
+		types.h kernel.h keyboard.h screen.h emit.h dos.h tss.h os.h \
+		mps.h hal.h timer.h peexe.h malloc.h free.h trees.h
+FILEIO.obj:	version.h stdarg.h stdio.h stdlib.h ctype.h string.h \
+		types.h kernel.h keyboard.h screen.h emit.h dos.h tss.h os.h \
+		mps.h hal.h timer.h peexe.h dosfile.h malloc.h free.h trees.h \
+		ifs.h
+RLOCK.obj:	version.h stdarg.h stdio.h stdlib.h ctype.h string.h \
+		types.h kernel.h keyboard.h screen.h emit.h dos.h tss.h os.h \
+		mps.h hal.h timer.h peexe.h malloc.h free.h rlock.h
+EVENT.obj:	stdarg.h stdio.h stdlib.h ctype.h string.h types.h kernel.h \
+		version.h keyboard.h screen.h emit.h dos.h tss.h os.h mps.h \
+		hal.h window.h menu.h dosfile.h timer.h peexe.h line.h \
+		loader.h malloc.h free.h event.h
+IFS.obj:	version.h stdarg.h stdio.h stdlib.h ctype.h string.h types.h \
+		kernel.h keyboard.h screen.h emit.h dos.h tss.h os.h mps.h \
+		hal.h timer.h peexe.h malloc.h free.h ifs.h dosfile.h
+DPARSE.obj:	stdarg.h stdio.h stdlib.h ctype.h string.h types.h \
+		kernel.h version.h keyboard.h screen.h emit.h os.h dos.h \
+		tss.h mps.h hal.h xcall.h window.h line.h loader.h menu.h \
+		rlock.h event.h dparse.h
+CMD.obj:	stdarg.h stdio.h stdlib.h ctype.h string.h types.h kernel.h \
+		version.h keyboard.h screen.h emit.h os.h dos.h tss.h mps.h \
+		hal.h xcall.h window.h line.h loader.h menu.h rlock.h event.h \
+		cmd.h
+START.obj:	stdarg.h stdio.h stdlib.h ctype.h string.h types.h kernel.h \
+		version.h keyboard.h screen.h emit.h os.h dos.h tss.h mps.h \
+		hal.h xcall.h window.h line.h loader.h menu.h rlock.h event.h \
+		start.h
+TRACKING.obj:	stdarg.h stdio.h stdlib.h ctype.h string.h types.h \
+		kernel.h version.h keyboard.h screen.h emit.h os.h dos.h \
+		tss.h mps.h hal.h xcall.h window.h line.h loader.h menu.h \
+		rlock.h malloc.h free.h tracking.h
+DEBMPS.obj:	stdarg.h stdio.h stdlib.h ctype.h string.h types.h \
+		kernel.h version.h keyboard.h screen.h emit.h os.h dos.h \
+		tss.h mps.h hal.h xcall.h window.h line.h loader.h menu.h \
+		rlock.h event.h debug.h dparse.h
+TSSPOOL.obj:	stdarg.h stdio.h stdlib.h ctype.h string.h types.h \
+		kernel.h version.h keyboard.h screen.h emit.h os.h dos.h \
+		tss.h mps.h hal.h xcall.h window.h line.h loader.h menu.h \
+		rlock.h event.h debug.h dparse.h
+XCALL.obj:	stdarg.h stdio.h stdlib.h ctype.h string.h types.h kernel.h \
+		version.h keyboard.h screen.h emit.h os.h dos.h tss.h mps.h \
+		hal.h xcall.h window.h line.h loader.h menu.h rlock.h event.h \
+		debug.h dparse.h bus.h
+IA32.obj:	stdarg.h stdio.h stdlib.h ctype.h string.h types.h kernel.h \
+		version.h keyboard.h screen.h emit.h os.h dos.h tss.h mps.h \
+		hal.h xcall.h window.h line.h loader.h menu.h rlock.h event.h \
+		debug.h dparse.h ia32.h altdebug.h
+SLD.obj:	stdarg.h stdio.h stdlib.h ctype.h string.h types.h kernel.h \
+		version.h keyboard.h screen.h emit.h os.h dos.h tss.h mps.h \
+		hal.h xcall.h window.h line.h loader.h menu.h rlock.h event.h \
+		debug.h dparse.h bus.h sld.h
+DEBCMD.obj:	stdarg.h stdio.h stdlib.h ctype.h string.h types.h \
+		kernel.h version.h keyboard.h screen.h emit.h os.h dos.h \
+		tss.h mps.h hal.h xcall.h window.h line.h loader.h menu.h \
+		rlock.h event.h debug.h dparse.h bus.h debcmd.h
+ACCEL.obj:	stdarg.h stdio.h stdlib.h ctype.h string.h types.h kernel.h \
+		version.h keyboard.h screen.h emit.h os.h dos.h tss.h mps.h \
+		hal.h xcall.h window.h line.h loader.h menu.h rlock.h event.h
+SPEED.obj:	stdarg.h stdio.h stdlib.h ctype.h string.h types.h kernel.h \
+		version.h keyboard.h screen.h emit.h dos.h tss.h os.h mps.h \
+		hal.h peexe.h window.h timer.h line.h dosfile.h loader.h \
+		event.h bus.h start.h
+STARTLIB.obj:	stdarg.h stdio.h stdlib.h ctype.h string.h types.h \
+		kernel.h version.h keyboard.h screen.h emit.h dos.h tss.h \
+		os.h mps.h hal.h peexe.h window.h timer.h line.h dosfile.h \
+		loader.h event.h bus.h start.h
+ALTDEBUG.obj:	stdarg.h stdio.h stdlib.h ctype.h string.h types.h \
+		kernel.h version.h keyboard.h screen.h emit.h os.h dos.h \
+		tss.h mps.h hal.h xcall.h window.h line.h loader.h menu.h \
+		rlock.h event.h altdebug.h
+SYMBOLS.obj:	stdarg.h stdio.h stdlib.h ctype.h string.h types.h \
+		kernel.h version.h keyboard.h screen.h emit.h os.h dos.h \
+		tss.h mps.h hal.h xcall.h window.h line.h loader.h menu.h \
+		rlock.h event.h debug.h dparse.h bus.h symbols.h malloc.h \
+		free.h
+EXPORTS.obj:	stdarg.h stdio.h stdlib.h ctype.h string.h types.h \
+		kernel.h version.h keyboard.h screen.h emit.h os.h dos.h \
+		tss.h mps.h hal.h xcall.h window.h line.h loader.h menu.h \
+		rlock.h event.h debug.h dparse.h bus.h peexe.h exports.h \
+		malloc.h free.h
+MUTEX.obj:	stdarg.h stdio.h stdlib.h ctype.h string.h types.h kernel.h \
+		version.h keyboard.h screen.h emit.h dos.h tss.h os.h mps.h \
+		hal.h timer.h peexe.h malloc.h free.h event.h
+RMUTEX.obj:	stdarg.h stdio.h stdlib.h ctype.h string.h types.h \
+		kernel.h version.h keyboard.h screen.h emit.h dos.h tss.h \
+		os.h mps.h hal.h timer.h peexe.h malloc.h free.h event.h
+DEBKERN.obj:	stdarg.h stdio.h stdlib.h ctype.h string.h types.h \
+		kernel.h version.h keyboard.h screen.h emit.h os.h dos.h \
+		tss.h mps.h hal.h xcall.h window.h line.h loader.h menu.h \
+		rlock.h event.h debug.h dparse.h bus.h debkern.h
+RWLOCK.obj:	stdarg.h stdio.h stdlib.h ctype.h string.h types.h \
+		kernel.h version.h keyboard.h screen.h emit.h dos.h tss.h \
+		os.h mps.h hal.h timer.h peexe.h malloc.h free.h event.h
+CLOADER.obj:	version.h stdarg.h stdio.h stdlib.h ctype.h types.h \
+		emit.h string.h dos.h tss.h os.h hal.h kernel.h screen.h \
+		peexe.h extrnvar.h dosfile.h mps.h
+LDOSFILE.obj:	stdarg.h stdio.h stdlib.h ctype.h string.h types.h \
+		kernel.h version.h keyboard.h screen.h emit.h dos.h tss.h \
+		os.h mps.h hal.h peexe.h window.h dosfile.h
+LFORMAT.obj:	stdarg.h stdio.h stdlib.h ctype.h kernel.h types.h \
+		version.h keyboard.h screen.h
+#ENDUPDATE#

@@ -1,0 +1,301 @@
+
+
+;***************************************************************************
+;
+;   Copyright (c) 1997, 1998 Timpanogas Research Group, Inc.  All Rights
+;                            Reserved.
+;
+;   This program is an unpublished work of TRG, Inc. and contains
+;   trade secrets and other proprietary information.  Unauthorized
+;   use, copying, disclosure, or distribution of this file without the
+;   consent of TRG, Inc. can subject the offender to severe criminal
+;   and/or civil penalities.
+;
+;
+;   AUTHOR   :  Jeff V. Merkey
+;   FILE     :  LOCK.386
+;   DESCRIP  :  Atomic Lock Primitives for MANOS v1.0
+;   DATE     :  November 12, 1997
+;
+;
+;***************************************************************************
+
+.486P         ; select the processor
+model flat
+
+include hal.inc
+
+	CGROUP GROUP  _TEXT
+	DGROUP GROUP  _DATA
+	ASSUME  cs:_TEXT, ds:_DATA, es:_DATA, fs:_DATA
+
+_DATA SEGMENT PUBLIC USE32 'DATA'
+
+   extrn  ExitOSFlag: dword
+   extrn  pindex: dword
+   extrn  active_processors: dword
+   extrn  panic: near
+   extrn  debuggerActive: dword
+
+spin_lock_deadlock         db  'spin_lock deadlock detected', 0
+spin_lock_up_deadlock      db  'spin_lock uniprocessor deadlock detected', 0
+spin_try_lock_up_deadlock  db  'spin_try_lock uniprocessor deadlock detected', 0
+
+
+_DATA ENDS
+
+
+_TEXT SEGMENT PUBLIC USE32 'CODE'
+
+    ASSUME  cs:_TEXT, ds:_DATA, es:_DATA, fs:_DATA
+
+       extrn  EnterDebugger: near
+
+public spin_lock
+spin_lock:
+      cmp     debuggerActive, 0
+      jnz     short lock_acquired
+
+      mov     ecx, [esp + 4]
+      xor     edx, edx
+
+      cmp     active_processors, 1
+      jle     up_set_lock
+
+lock_xchg:
+      mov     eax, CR2
+      mov     eax, pindex[eax * 4]
+      inc     [eax].lockAssertions
+
+;;      mov     eax, 1
+      mov     eax, esp
+      xchg    eax, dword ptr [ecx]
+      or      eax, eax
+      jz      lock_acquired
+
+spin_test:
+      inc     edx
+      cmp     edx, 1FFFFFFFh
+      jg      deadlock_detected
+
+      cmp     dword ptr [ecx], 0
+      jnz     spin_test
+      jmp     lock_xchg
+
+lock_acquired:
+      ret
+
+deadlock_detected:
+      push     OFFSET spin_lock_deadlock
+      call     panic
+      add      esp, 4
+      xor      eax, eax
+      ret
+
+up_set_lock:
+      cmp      dword ptr [ecx], 0
+      jne      up_deadlock
+
+      mov      dword ptr [ecx], 1
+      xor      eax, eax
+      ret
+
+up_deadlock:
+      push     OFFSET spin_lock_up_deadlock
+      call     panic
+      add      esp, 4
+      xor      eax, eax
+      ret
+
+
+public spin_unlock
+spin_unlock:
+      cmp     debuggerActive, 0
+      jnz     short spin_unlock_exit
+
+      mov     eax, dword ptr [esp + 4]
+      mov     dword ptr [eax], 0
+
+spin_unlock_exit:
+      ret
+
+public spin_try_lock
+spin_try_lock:
+      cmp     debuggerActive, 0
+      jnz     short lock_obtained
+
+      mov     ecx, [esp + 4]
+
+      cmp     active_processors, 1
+      jle     up_try_lock
+
+      cmp     dword ptr [ecx], 0
+      jnz     lock_busy
+
+      mov     eax, CR2
+      mov     eax, pindex[eax * 4]
+      inc     [eax].lockAssertions
+
+;;      mov     eax, 1
+      mov     eax, esp
+      xchg    eax, dword ptr [ecx]
+      or      eax, eax
+      jnz     lock_busy
+
+lock_obtained:
+      mov     eax, 1
+      ret
+
+lock_busy:
+      xor     eax, eax
+      ret
+
+up_try_lock:
+      cmp      dword ptr [ecx], 0
+      jne      lock_busy
+
+      mov      dword ptr [ecx], 1
+      mov      eax, 1
+      ret
+
+
+public spin_try_with_bus_lock
+spin_try_with_bus_lock:
+      mov     ecx, [esp + 4]
+
+      cmp     active_processors, 1
+      jle     up_try_lock_2
+
+;      cmp     dword ptr [ecx], 0
+;      jnz     lock_busy
+
+      mov     eax, CR2
+      mov     eax, pindex[eax * 4]
+      inc     [eax].lockAssertions
+
+;;      mov     eax, 1
+	mov     eax, esp
+      xchg    eax, dword ptr [ecx]
+;;      or      eax, eax
+;;      jnz     lock_busy_2
+
+;;lock_obtained:
+;;      mov     eax, 1
+      ret
+
+;;lock_busy_2:
+;;      xor     eax, eax
+;;      ret
+
+up_try_lock_2:
+      cmp      dword ptr [ecx], 0
+      jne      up_try_deadlock_2
+
+      mov      dword ptr [ecx], 1
+      mov      eax, 0
+      ret
+
+up_try_deadlock_2:
+      push     OFFSET spin_try_lock_up_deadlock
+      call     panic
+      add      esp, 4
+      xor      eax, eax
+      ret
+
+;
+;
+;
+;
+;
+
+public dspin_lock
+dspin_lock:
+      mov     ecx, [esp + 4]
+      xor     edx, edx
+
+      cmp     active_processors, 1
+      jle     dup_set_lock
+
+dlock_xchg:
+      mov     eax, 1
+      xchg    eax, dword ptr [ecx]
+      or      eax, eax
+      jz      dlock_acquired
+
+dspin_test:
+      inc     edx
+      cmp     edx, 1FFFFFFFh
+      jg      ddeadlock_detected
+
+      cmp     dword ptr [ecx], 0
+      jnz     dspin_test
+      jmp     dlock_xchg
+
+dlock_acquired:
+      xor     eax, eax
+      ret
+
+ddeadlock_detected:
+      mov     eax, -1
+      ret
+
+dup_set_lock:
+      cmp      dword ptr [ecx], 0
+      jne      dup_deadlock
+
+      mov      dword ptr [ecx], 1
+      xor      eax, eax
+      ret
+
+dup_deadlock:
+      mov      eax, -1
+      ret
+
+
+public dspin_unlock
+dspin_unlock:
+      mov     eax, dword ptr [esp + 4]
+      mov     dword ptr [eax], 0
+      ret
+
+
+public dspin_try_lock
+dspin_try_lock:
+      mov     ecx, [esp + 4]
+
+      cmp     active_processors, 1
+      jle     dup_try_lock
+
+      cmp     dword ptr [ecx], 0
+      jnz     dlock_busy
+
+      mov     eax, 1
+      xchg    eax, dword ptr [ecx]
+      or      eax, eax
+      jnz     dlock_busy
+
+dlock_obtained:
+      xor     eax, eax
+      ret
+
+dlock_busy:
+      mov     eax, -1
+      ret
+
+dup_try_lock:
+      cmp      dword ptr [ecx], 0
+      jne      dup_try_deadlock
+
+      mov      dword ptr [ecx], 1
+      xor      eax, eax
+      ret
+
+dup_try_deadlock:
+      mov      eax, -1
+      ret
+
+
+_TEXT ENDS
+
+END
+

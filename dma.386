@@ -1,0 +1,520 @@
+
+
+;***************************************************************************
+;
+;   Copyright (c) 1997, 1998 Timpanogas Research Group, Inc.  All Rights
+;                            Reserved.
+;
+;   This program is an unpublished work of TRG, Inc. and contains
+;   trade secrets and other proprietary information.  Unauthorized
+;   use, copying, disclosure, or distribution of this file without the
+;   consent of TRG, Inc. can subject the offender to severe criminal
+;   and/or civil penalities.
+;
+;
+;   AUTHOR   :  Jeff V. Merkey
+;   FILE     :  DMA.386
+;   DESCRIP  :  8290 DMA Code for MANOS v1.0
+;   DATE     :  November 12, 1997
+;
+;
+;***************************************************************************
+
+.486P         ; select the processor
+model flat
+
+;========== DMA Equates for DMA amd PAGE registers =========
+;NOTES:  With 8 bit DMA, the lower WORD (bits 15-0) are placed into
+; the address registers of the DMA, and the Page register is the next
+; most significant byte (bits 23-16). With WORD DMA moves (channels 5-7),
+; address bits 16-1 are placed in the address registers, while 23-17 are
+; put in the page register.  Bit 16 is ignored by the page register.
+;
+;
+; DMA 1 Port addresses and page registers
+
+DMA10Add	EQU  00h	; Ch 0 Address
+DMA10Cnt	EQU  01h	; Ch 0 Word Count
+DMA11Add	EQU  02h	; Ch 1 Address
+DMA11Cnt	EQU  03h	; Ch 1 Word Count
+DMA12Add	EQU  04h	; Ch 2 Address
+DMA12Cnt	EQU  05h	; Ch 2 Word Count
+DMA13Add	EQU  06h	; Ch 3 Address
+DMA13Cnt	EQU  07h	; Ch 3 Word Count
+DMA1StatCmd	EQU  08h	; Read Status/Write Command
+DMA1RqReg	EQU  09h	; Read/Write DMA Rq Register
+DMA1RCmdWbm	EQU  0Ah	; Read Command/Write Single bit mask
+DMA1Mode	EQU  0Bh	; Read/Write Mode register
+DMA1FF		EQU  0Ch	; Writing this address clears byte ptr flip flop
+DMA1Clear	EQU  0Dh	; Write causes MASTER Clear (Read from Temp Reg)
+DMA1ClrMode	EQU  0Eh	; Rd clears mode reg count/Wr Clr ALL mask bits
+DMA1MskBts	EQU  0Fh	; Read/Write DMA Rq Mask Register
+
+; DMA 2 Port addresses
+
+DMA20Add	EQU  0C0h  	; Ch 0 Address
+DMA20Cnt	EQU  0C2h  	; Ch 0 Word Count
+DMA21Add	EQU  0C4h       ; Ch 1 Address
+DMA21Cnt	EQU  0C6h       ; Ch 1 Word Count
+DMA22Add	EQU  0C8h       ; Ch 2 Address
+DMA22Cnt	EQU  0CAh       ; Ch 2 Word Count
+DMA23Add	EQU  0CCh       ; Ch 3 Address
+DMA23Cnt	EQU  0CEh       ; Ch 3 Word Count
+DMA2StatCmd	EQU  0D0h       ; Read Status/Write Command
+DMA2RqReg	EQU  0D2h       ; Read/Write DMA Rq Register
+DMA2RCmdWbm	EQU  0D4h       ; Read Command/Write Single bit mask
+DMA2Mode	EQU  0D6h       ; Read/Write Mode register
+DMA2FF		EQU  0D8h       ; Writing this address clears byte ptr flip flop
+DMA2Clear	EQU  0DAh       ; Write causes MASTER Clear (Read from Temp Reg)
+DMA2ClrMode	EQU  0DCh       ; Rd clears mode reg count/Wr Clr ALL mask bits
+DMA2MskBts	EQU  0DEh       ; Read/Write DMA Rq Mask Register
+
+;DMA Page register by DRQ/DACK number
+
+DMAPage0	EQU 87h		  ; DMA DACK0 Page register
+DMAPage1	EQU 83h		  ; DACK1 (etc. etc. etc.)
+DMAPage2	EQU 81h
+DMAPage3	EQU 82h
+DMAPage5	EQU 8Bh
+DMAPage6	EQU 89h
+DMAPage7	EQU 8Ah
+
+	CGROUP GROUP  _TEXT
+	DGROUP GROUP  _DATA
+	ASSUME  cs:_TEXT, ds:_DATA, es:_DATA, fs:_DATA
+
+_DATA SEGMENT PUBLIC USE32 'DATA'
+_DATA ENDS
+
+_TEXT SEGMENT PUBLIC USE32 'CODE'
+
+    ASSUME  cs:_TEXT, ds:_DATA, es:_DATA, fs:_DATA
+
+;
+; The following code sets up the initial DMA channel values for
+; both chips to most probable use. Includes cascade mode for CH4
+; which is DMA channel 0 on chip 2
+;
+
+   align 16
+public InitDMA
+InitDMA:
+	mov   al, 04		  ; Master disable
+	out   DMA1StatCmd, al
+	out   DMA2StatCmd, al
+
+	xor   al, al		  ; MASTER CLEAR (same as hardware reset)
+	out   DMA1Clear, al
+	out   DMA2Clear, al
+
+	xor   al, al		  ; All commands set to default (0)
+	out   DMA1StatCmd, al
+	out   DMA2StatCmd, al
+
+	mov   al, 40h		  ; CH 0 DMA 1
+	out   DMA1Mode, al	  ;
+	mov   al, 0C0h		  ; CH 0 DMA 2  (Cascade Mode)
+	out   DMA2Mode, al	  ;
+
+	mov   al, 41h		  ; CH 1 DMA 1 & 2
+	out   DMA1Mode, al	  ;
+	out   DMA2Mode, al	  ;
+
+	mov   al, 42h		  ; CH 2 DMA 1 & 2
+	out   DMA1Mode, al	  ;
+	out   DMA2Mode, al	  ;
+
+	mov   al, 43h		  ; CH 3 DMA 1 & 2
+	out   DMA1Mode, al	  ;
+	out   DMA2Mode, al	  ;
+
+	xor   al, al
+	out   DMA1ClrMode, al  	  ; Enable ALL DMA 1 Channels
+	out   DMA2ClrMode, al  	  ; Enable ALL DMA 2 Channels
+	ret
+
+;
+;-----------------------------------------------------------
+; The following code sets up a single DMA channel for the caller.
+; DMA is crippled because it can't move across 64K physical
+; boundries. It's the caller's responsibility to know if he is
+; crossing a boundry! If he does, this will wrap around over the segment!!!
+; This code is completely reentrant.
+; There is only one call for DMA set up.
+
+; The caller sets the type of DMA operation (In, Out, Verify).
+; For channels 5,6 & 7, the address & count must be divided by
+; two for the DMA hardware. This routine does this for you!
+; Algorythm - Put mode byte bits (except channel bits) in BL, then jump to
+; correct routine for that channel. The call will allow set up of
+; all the differnet types of DMA modes for read and write with this
+; single call.	The call:
+;
+;   DmaSetUp(addr, size, channel, type, mode)
+;
+;   addr     is physical memory address
+;   size     is nBytes to move (STILL bytes for word xfers, we do math)
+;   channel  (0,1,2,3,5,6,7)
+;   type -   0 = Verify, 1 = In (Write Mem), 2 = Out (Read memory)
+;   mode -   0 Demand Mode, 1 Single Cycle,     (Disk I/O uses 1)
+;	     2 Block, 3 Cascade
+;
+
+   align 16
+public DMASetUp
+DMASetUp:
+	push  ebp
+	push  edi
+	push  esi
+	push  ebx
+
+	mov   eax, [esp + 36]	  ; mode
+	cmp   eax, 04		  ; Mode must be < 4
+	jb    DMAModeOK
+
+	mov   eax, -2             ; mode error
+	jmp   DMAEnd
+
+DMAModeOK:
+	shl   eax, 6		  ; Move Mode bits to 6 and 7
+	mov   bl, al		  ; Put it in bl
+	mov   eax, [esp + 32]	  ; get type
+	and   bl, 0C0h		  ; Set to Verify by default (low bits 0)
+	cmp   eax, 0		  ; Check fType (Verify?)
+	je    DMASelect		  ; Yes
+
+	cmp   eax, 1		  ; In? (Write)
+	je    DMAWrite		  ; Yes (if no then fall thru to Read)
+
+DMARead:
+	or    bl, 00001000b	  ; or read command to bl (out)
+	jmp   DMASelect
+
+DMAWrite:
+	or    bl, 00000100b	  ; or write command to bl (in)
+
+DMASelect:
+	mov   eax, [esp + 28]	  ; Jump table for channel selection
+	cmp   eax, 0		  ;
+	je    DMA0
+
+	cmp   eax, 1
+	je    DMA1
+
+	cmp   eax, 2
+	je    DMA2
+
+	cmp   eax, 3
+	je    DMA3
+
+	cmp   eax, 5
+	je    DMA5
+
+	cmp   eax, 6
+	je    DMA6
+
+	cmp   eax, 7
+	je    DMA7
+
+	mov   eax, -1
+	jmp   DMAEnd
+
+DMA0:
+	cli
+	mov   al, 00000100b	  ; channel 0 Set Mask for DRQ
+	out   DMA1RCmdWbm, al	  ;
+	mov   al, 00000000b	  ; CH0 (CH is last 2 bits)
+	or    al, bl		  ; or with MODE
+	out   DMA1Mode, al
+	out   DMA1FF, al	  ; Clear FlipFLop (Val in al irrelevent)
+	mov   eax, [esp + 20]	  ; PhyMem
+	out   DMA10Add, al	  ; Lo byte address
+	shr   eax, 8
+	out   DMA10Add, al	  ; Hi Byte
+	shr   eax, 8
+	out   DMAPage0, al	  ; Highest byte (to page register)
+	mov   eax, [esp + 24]     ; size
+	dec   eax
+	out   DMA10Cnt, al
+	shr   eax, 8
+	out   DMA10Cnt, al
+	mov   al, 00000000b	  ; channel 0 Clear Mask for DRQ
+	out   DMA1RCmdWbm, al
+	sti
+	xor   eax, eax
+	jmp   DMAEnd
+
+DMA1:
+	cli
+	mov   al, 00000101b	  ; channel 1 Set Mask for DRQ
+	out   DMA1RCmdWbm, al
+	mov   al, 00000001b	  ; CH1
+	or    al, bl		  ; or with MODE/TYPE
+	out   DMA1Mode, al
+	out   DMA1FF, al	  ; Clear FlipFLop (Val in al irrelevent)
+	mov   eax, [esp + 20]	  ; PhyMem
+	out   DMA11Add, al	  ; Lo byte address
+	shr   eax, 8
+	out   DMA11Add, al	  ; Hi Byte
+	shr   eax, 8
+	out   DMAPage1, al	  ; Highest byte (to page register)
+	mov   eax, [esp + 24]	  ; size
+	dec   eax
+	out   DMA11Cnt, al
+	shr   eax, 8
+	out   DMA11Cnt, al
+	mov   al, 00000001b	  ; channel 1 Clear Mask for DRQ
+	out   DMA1RCmdWbm, al
+	sti
+	xor   eax, eax
+	jmp   DMAEnd
+
+DMA2:
+	cli
+	mov   al, 00000110b	  ; channel 2 Set Mask for DRQ
+	out   DMA1RCmdWbm, al
+	mov   al, 00000010b	  ; CH2
+	or    al, bl		  ; or with MODE
+	out   DMA1Mode, al
+	out   DMA1FF, al	  ; Clear FlipFLop (Val in al irrelevent)
+	mov   eax, [esp + 20]	  ; PhyMem
+	out   DMA12Add, al	  ; Lo byte address
+	shr   eax, 8
+	out   DMA12Add, al	  ; Hi Byte
+	shr   eax, 8
+	out   DMAPage2, al	  ; Highest byte (to page register)
+	mov   eax, [esp + 24]	  ; size
+	dec   eax
+	out   DMA12Cnt, al
+	shr   eax, 8
+	out   DMA12Cnt, al
+	mov   al, 00000010b	  ; channel 2 Clear Mask for DRQ
+	out   DMA1RCmdWbm, al
+	sti
+	xor   eax, eax
+	jmp   DMAEnd
+
+DMA3:
+	cli
+	mov   al, 00000111b	  ; channel 3 Set Mask for DRQ
+	out   DMA1RCmdWbm, al
+	mov   al, 00000011b	  ; CH3
+	or    al, bl		  ; or with MODE
+	out   DMA1Mode, al
+	out   DMA1FF, al	  ; Clear FlipFLop (Val in al irrelevent)
+	mov   eax, [esp + 20]	  ; PhyMem
+	out   DMA13Add, al	  ; Lo byte address
+	shr   eax, 8
+	out   DMA13Add, al	  ; Hi Byte
+	shr   eax, 8
+	out   DMAPage3, al	  ; Highest byte (to page register)
+	mov   eax, [esp + 24]	  ; size
+	dec   eax
+	out   DMA13Cnt, al
+	shr   eax, 8
+	out   DMA13Cnt, al
+	mov   al, 00000011b	  ; channel 3 Clear Mask for DRQ
+	out   DMA1RCmdWbm, al
+	sti
+	xor   eax, eax
+	jmp   DMAEnd
+
+; NOTE: DMA channels 5-7 are on DMA2 and numbered 1-3 for chip select purposes
+
+DMA5:
+	cli
+	mov   al, 00000101b	  ; channel 1 DMA2 Set Mask for DRQ
+	out   DMA2RCmdWbm, al
+	mov   al, 00000001b	  ; CH1 on DMA 2
+	or    al, bl		  ; or with MODE
+	out   DMA2Mode, al
+	out   DMA2FF, al	  ; Clear FlipFLop (Val in al irrelevent)
+	mov   eax, [esp + 20]	  ; PhyMem
+	mov   ebx, eax		  ; Save ebx for page
+	and   eax, 0FFFFh	  ; Rid of all but lower 16
+	shr   eax, 1		  ; DIV by 2 for WORD Xfer (bits 16-1)
+	out   DMA21Add, al	  ; Lo byte address
+	shr   eax, 8
+	out   DMA21Add, al	  ; Hi Byte
+	mov   eax, ebx
+	shr   eax, 15		  ; We only need 23-17 for the page
+	out   DMAPage5, al	  ; Highest byte (to page register)
+	mov   eax, [esp + 24]	  ; size
+	shr   eax, 1		  ; DIV by 2 for WORD Xfer
+	dec   eax		  ; One less word
+	out   DMA21Cnt, al
+	shr   eax, 8
+	out   DMA21Cnt, al
+	mov   al, 00000001b	  ; channel 1 Clear Mask for DRQ
+	out   DMA2RCmdWbm, al
+	sti
+	xor   eax, eax
+	jmp   DMAEnd
+;
+DMA6:
+	cli
+	mov   al, 00000110b	  ; channel 2 Set Mask for DRQ
+	out   DMA2RCmdWbm, al
+	mov   al, 00000010b	  ; CH2 on DMA 2
+	or    al, bl		  ; or with MODE
+	out   DMA2Mode, al
+	out   DMA2FF, al	  ; Clear FlipFLop (Val in al irrelevent)
+	mov   eax, [esp + 20]	  ; PhyMem
+	mov   ebx, eax
+	and   eax, 0FFFFh	  ; Rid of all but lower 16
+	shr   eax, 1		  ; DIV by 2 for WORD Xfer
+	out   DMA22Add, al	  ; Lo byte address
+	shr   eax, 8
+	out   DMA22Add, al	  ; Hi Byte
+	mov   eax, ebx
+	shr   eax, 15
+	out   DMAPage6, al	  ; Highest byte (to page register)
+	mov   eax, [esp + 24]	  ; size
+	shr   eax, 1		  ; DIV by 2 for WORD Xfer
+	dec   eax
+	out   DMA22Cnt, al
+	shr   eax, 8
+	out   DMA22Cnt, al
+	mov   al, 00000010b	  ; channel 2 Clear Mask for DRQ
+	out   DMA2RCmdWbm, al
+	sti
+	xor   eax, eax
+	jmp   DMAEnd
+;
+DMA7:
+	cli
+	mov   al, 00000111b	  ; channel 3 Set Mask for DRQ
+	out   DMA2RCmdWbm, al
+	mov   al, 00000011b	  ; CH3 on DMA 2
+	or    al, bl		  ; or with MODE
+	out   DMA2Mode, al
+	out   DMA2FF, al	  ; Clear FlipFLop (Val in al irrelevent)
+	mov   eax, [esp + 20]	  ; PhyMem
+	mov   ebx, eax
+	and   eax, 0FFFFh	  ; Rid of all but lower 16
+	shr   eax, 1		  ; DIV by 2 for WORD Xfer
+	out   DMA23Add, al	  ; Lo byte address
+	shr   eax, 8
+	out   DMA23Add, al	  ; Hi Byte
+	mov   eax, ebx
+	shr   eax, 15
+	out   DMAPage6, al	  ; Highest byte (to page register)
+	mov   eax, [esp + 24]	  ; size
+	shr   eax, 1		  ; DIV by 2 for WORD Xfer
+	dec   eax
+	out   DMA23Cnt, al
+	shr   eax, 8
+	out   DMA23Cnt, al
+	mov   al, 00000011b	  ; channel 3 Clear Mask for DRQ
+	out   DMA2RCmdWbm, al
+	sti
+	xor   eax, eax
+
+DMAEnd:
+
+	pop   ebx
+	pop   esi
+	pop   edi
+	pop   ebp
+	ret
+
+;------------------------------------------------------------
+; GetDMACount returns the number of bytes or words left in the
+; DMA count register for the channel specified.  For channels
+; 5-7 this will be the number of WORDS. For 0-3 this will be BYTES!
+; Programmers should note (I should tell them) this value will read
+; one less byte/word than is really in the channel. This is because
+; 0 = 1 for set purposes. to move 64K, you actually set the
+; channel 65,535.
+;
+;	GetDMACount(channel, CountRet)
+;
+;	channel (0,1,2,3,5,6,7)
+;	CountRet is a pointer to a Word (2 byte unsigned value) where
+;       the count will be returned. The count is number of WORDS-1
+;       for channels 5-7 and BYTES-1 for channels 0-3.
+
+   align 16
+public GetDMACount
+GetDMACount:
+	push  ebp
+	push  edi
+	push  esi
+	push  ebx
+
+	mov   eax, [esp + 24]	  ; channel
+	mov   esi, [esp + 20]	  ; return address for count
+DMACSelect:
+	cmp   eax, 0		  ;
+	jne   DMAC1
+
+	mov   dx, DMA10Cnt   	  ;
+	jmp   DMACDoIt
+
+DMAC1:
+	cmp   eax, 1
+	jne   DMAC2
+
+	mov   dx, DMA11Cnt   	  ;
+	jmp   DMACDoIt
+
+DMAC2:
+	cmp   eax, 2
+	jne   DMAC3
+
+	mov   dx, DMA12Cnt   	  ;
+	jmp   DMACDoIt
+DMAC3:
+	cmp   eax, 3
+	jne   DMAC5
+
+	mov   dx, DMA13Cnt   	  ;
+	jmp   DMACDoIt
+
+DMAC5:
+	cmp   eax, 5
+	jne   DMAC6
+
+	mov   dx, DMA21Cnt   	  ;
+	jmp   DMACDoIt
+
+DMAC6:
+	cmp   eax, 6
+	jne   DMAC7
+
+	mov   dx, DMA22Cnt   	  ;
+	jmp   DMACDoIt
+
+DMAC7:
+	mov   dx, DMA23Cnt   	  ;
+	cmp   eax, 7
+	je    DMACDoIt
+
+	mov   eax, -1             ; No such channel!
+
+	pop   ebx
+	pop   esi
+	pop   edi
+	pop   ebp
+	ret
+
+DMACDoIt:
+	cli
+	in    al, dx           	  ;
+	mov   cl, al           	  ;
+	in    al, dx           	  ;
+	mov   ch, al           	  ; CX has words/bytes left in DMA
+	sti			  ;
+	mov   word ptr [esi], cx  ;
+	xor   eax, eax		  ; No Error
+
+
+	pop   ebx
+	pop   esi
+	pop   edi
+	pop   ebp
+	ret
+
+_TEXT ENDS
+
+END
